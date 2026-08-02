@@ -1,0 +1,7 @@
+# Claude Code のローカル設定（各自の環境に依存するため共有しない）
+.claude/
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
