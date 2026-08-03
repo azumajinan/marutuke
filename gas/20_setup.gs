@@ -5,28 +5,42 @@
  */
 
 /**
- * シートを一式作る。既にあるシートには触らない。
- * スクリプトエディタで一度だけ実行する。
+ * シートを一式作る。何度実行してもよい。
+ *
+ * 既にあるシートのデータには触らないが、あとから増えた列だけは右端に足す。
+ * 列の順番は見出し名で引いているので、右端に足しても既存の並びは壊れない。
  */
 function initialize() {
   var ss = ss_();
   var created = [];
+  var addedCols = [];
 
   for (var key in SHEETS) {
     var name = SHEETS[key];
+    var head = HEADERS[name];
     var sh = ss.getSheetByName(name);
     if (!sh) {
       sh = ss.insertSheet(name);
       created.push(name);
     }
     if (sh.getLastRow() === 0) {
-      var head = HEADERS[name];
       sh.getRange(1, 1, 1, head.length).setValues([head]);
       sh.getRange(1, 1, 1, head.length)
         .setFontWeight('bold')
         .setBackground('#EEF0F5');
       sh.setFrozenRows(1);
       sh.autoResizeColumns(1, head.length);
+    } else {
+      // 足りない見出しだけ右端に付け足す（列を増やしたときの移行）
+      var map = headerMap_(sh);
+      var missing = head.filter(function (h) { return map[h] === undefined; });
+      if (missing.length) {
+        var at = sh.getLastColumn() + 1;
+        sh.getRange(1, at, 1, missing.length).setValues([missing])
+          .setFontWeight('bold')
+          .setBackground('#EEF0F5');
+        addedCols.push(name + '（' + missing.join('、') + '）');
+      }
     }
   }
 
@@ -36,9 +50,10 @@ function initialize() {
     ss.deleteSheet(first);
   }
 
-  var msg = created.length
-    ? '作成したシート: ' + created.join(', ')
-    : 'すべてのシートは既にあります。';
+  var parts = [];
+  if (created.length)   parts.push('作成したシート: ' + created.join('、'));
+  if (addedCols.length) parts.push('列を足しました: ' + addedCols.join(' / '));
+  var msg = parts.length ? parts.join('\n') : 'シートは最新の状態です。';
   Logger.log(msg);
   return msg;
 }

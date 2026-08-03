@@ -107,10 +107,32 @@ function addRecord_(teacher, p) {
   if (!st) throw new Error('その生徒は見つかりません。');
   if (!bk) throw new Error('その教材は見つかりません。');
 
+  var key = String(p.key || '').trim();
   var id = newId_('r');
   var now = new Date();
 
-  withLock_(function () {
+  var existing = withLock_(function () {
+    /* 応答が落ちて画面が再送してきた場合。書かずに前の結果を返す。
+       ロックの中で見てから書くので、二重に入ることはない */
+    if (key) {
+      var rows = readAll_(SHEETS.RECORD);
+      for (var i = 0; i < rows.length; i++) {
+        if (String(rows[i]['受付キー'] || '').trim() !== key) continue;
+        return {
+          id: rows[i]['id'],
+          at: new Date(rows[i]['日時']).getTime(),
+          teacher: rows[i]['講師id'],
+          student: rows[i]['生徒id'], book: rows[i]['教材id'],
+          page: toInt_(rows[i]['ページ'], 1),
+          section: String(rows[i]['見出し'] || ''),
+          major: toInt_(rows[i]['大問'], 1), q: toInt_(rows[i]['小問'], 1),
+          result: TEXT_TO_RESULT[String(rows[i]['結果']).trim()] || 1,
+          cause: TEXT_TO_CAUSE[String(rows[i]['つまずき'] || '').trim()] || 0,
+          duplicate: true
+        };
+      }
+    }
+
     appendRow_(SHEETS.RECORD, {
       'id':       id,
       '日時':      now,
@@ -125,9 +147,13 @@ function addRecord_(teacher, p) {
       '大問':      toInt_(p.major, 1),
       '小問':      toInt_(p.q, 1),
       '結果':      RESULT_TO_TEXT[result],
-      'つまずき':   CAUSE_TO_TEXT[cause]
+      'つまずき':   CAUSE_TO_TEXT[cause],
+      '受付キー':   key
     });
+    return null;
   });
+
+  if (existing) return existing;
 
   return {
     id: id, at: now.getTime(), teacher: teacher.id,
@@ -138,7 +164,12 @@ function addRecord_(teacher, p) {
   };
 }
 
-/** 取り消し。記録した本人の直近の1件を消す用途を想定している */
+/**
+ * 取り消し。記録した本人の直近の1件を消す用途を想定している。
+ *
+ * 既に無い場合もエラーにしない。応答が落ちて画面が再送してくることがあり、
+ * そのとき「消せませんでした」と出すのは嘘になるため。消えていれば目的は足りている。
+ */
 function deleteRecord_(teacher, id) {
   return withLock_(function () {
     var rows = readAll_(SHEETS.RECORD);
@@ -147,8 +178,20 @@ function deleteRecord_(teacher, id) {
       deleteRow_(SHEETS.RECORD, rows[i]._row);
       return true;
     }
-    throw new Error('その記録は見つかりません（既に消された可能性があります）。');
+    return true;
   });
+}
+
+/** 受付キーから記録を1件引く。入ったのか入らなかったのか分からないときに使う */
+function findRecordByKey_(key) {
+  key = String(key || '').trim();
+  if (!key) return null;
+  var rows = readAll_(SHEETS.RECORD);
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i]['受付キー'] || '').trim() !== key) continue;
+    return { id: rows[i]['id'], at: new Date(rows[i]['日時']).getTime() };
+  }
+  return null;
 }
 
 function setCause_(teacher, id, cause) {

@@ -77,6 +77,10 @@ function route_(b) {
     case 'setCause':
       return setCause_(teacher, b.id, b.cause);
 
+    /** 応答が落ちたときの後始末。受付キーで記録が入ったか確かめる */
+    case 'findRecord':
+      return findRecordByKey_(b.key);
+
     case 'addSection':
       return addSection_(teacher, b.bookId, b.label);
 

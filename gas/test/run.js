@@ -215,7 +215,53 @@ t('記録を消せる', () => {
   deleteRecord_(T, id);
   eq(getRecords_({ days: 0 }).length, 1);
 });
-t('無い記録の削除はエラー', () => throws(() => deleteRecord_(T, 'r_nope'), /見つかりません/));
+t('無い記録の削除はエラーにしない', () => eq(deleteRecord_(T, 'r_nope'), true));
+
+console.log('\n■ 応答が落ちたときの再送（受付キー）');
+t('同じ受付キーは二重に入らない', () => {
+  const n0 = getRecords_({ days: 0 }).length;
+  const p = { key: 'k-abc', student: S, book: B, page: 90, section: '', major: 3, q: 1, result: 2, cause: 2 };
+  const a = addRecord_(T, p);
+  const b = addRecord_(T, p);                    // 画面が再送した想定
+  eq(getRecords_({ days: 0 }).length, n0 + 1);
+  eq(b.id, a.id);
+  eq(b.duplicate, true);
+  eq(b.result, 2); eq(b.cause, 2); eq(b.page, 90);
+});
+t('受付キーが無ければ従来どおり毎回入る', () => {
+  const n0 = getRecords_({ days: 0 }).length;
+  const p = { student: S, book: B, page: 91, section: '', major: 1, q: 1, result: 1 };
+  addRecord_(T, p); addRecord_(T, p);
+  eq(getRecords_({ days: 0 }).length, n0 + 2);
+});
+t('受付キーから記録を引ける', () => {
+  const f = findRecordByKey_('k-abc');
+  if (!f || !f.id) throw new Error('引けない');
+  eq(f.id, getRecords_({ days: 0 }).filter(r => r.page === 90)[0].id);
+});
+t('無いキーは null', () => eq(findRecordByKey_('k-nope'), null));
+t('findRecord も認証が要る', () => {
+  const res = JSON.parse(doPost({ postData: { contents: JSON.stringify({ action: 'findRecord', key: 'k-abc' }) } }).getContent());
+  eq(res.ok, false);
+});
+
+console.log('\n■ 列を増やしたときの移行');
+t('既にあるシートに足りない列を付け足す', () => {
+  const sh = store[SHEETS.RECORD];
+  const col = sh[0].indexOf('受付キー');
+  if (col < 0) throw new Error('前提が崩れている');
+  sh.forEach(r => r.splice(col, 1));            // 古いシートを再現（受付キー列が無い）
+  eq(store[SHEETS.RECORD][0].indexOf('受付キー'), -1);
+  initialize();
+  const after = store[SHEETS.RECORD][0].indexOf('受付キー');
+  if (after < 0) throw new Error('列が足されていない');
+  eq(after, store[SHEETS.RECORD][0].length - 1);   // 右端に足す
+});
+t('列を足しても既存の行は読める', () => {
+  const rs = getRecords_({ days: 0 });
+  if (!rs.length) throw new Error('読めなくなった');
+  eq(rs.filter(r => r.page === 90).length, 1);
+});
 
 console.log('\n■ 見出しの追加');
 t('追加できる', () => { addSection_(T, B, '入試対策'); eq(getMasters_().books[0].sections.includes('入試対策'), true); });
@@ -239,6 +285,7 @@ t('空行があっても読み飛ばす', () => {
   eq(getMasters_().students.length, 2);
 });
 t('結果が壊れた行は捨てる', () => {
+  const before = getRecords_({ days: 0 }).length;
   const sh = store[SHEETS.RECORD];
   const head = sh[0];
   const bad = head.map(() => '');
@@ -246,7 +293,7 @@ t('結果が壊れた行は捨てる', () => {
   bad[head.indexOf('日時')] = new Date();
   bad[head.indexOf('結果')] = 'あ';
   sh.push(bad);
-  eq(getRecords_({ days: 0 }).length, 1);             // 壊れた行は数に入らない
+  eq(getRecords_({ days: 0 }).length, before);        // 壊れた行は数に入らない
 });
 t('無効な生徒は一覧から消える', () => {
   const sh = store[SHEETS.STUDENT];

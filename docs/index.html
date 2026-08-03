@@ -1433,24 +1433,68 @@ body.live > .device::after { display: none; }
      CORS の事前確認（OPTIONS）が飛び、GAS はそれに応答できない。 */
   var auth = { token: null, teacher: null };
 
-  function api(action, params) {
+  /**
+   * GAS のウェブアプリは POST が googleusercontent へリダイレクトされる作りで、
+   * その2段目が一定の割合で 404 を返す（実測で10回に2回、遅延も最大30秒台）。
+   * 落ちたのが往路か復路かは区別できないので、送り直しても二重にならない操作だけ再送する。
+   */
+  var RETRIES = 3;
+  var RETRY_WAIT = [700, 1800];
+
+  function api(action, params, opt) {
     var body = { action: action };
     for (var k in params) if (params.hasOwnProperty(k)) body[k] = params[k];
     if (auth.token) body.token = auth.token;
+    var payload = JSON.stringify(body);
+    var canRetry = !opt || opt.retry !== false;
 
-    return fetch(API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(body)
-    }).then(function (res) {
-      return res.json().catch(function () {
-        throw new Error("サーバーの応答を読めませんでした。");
+    function attempt(n) {
+      return fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: payload
+      }).then(function (res) {
+        return res.text();
+      }).then(function (txt) {
+        var j = null;
+        try { j = JSON.parse(txt); } catch (e) { j = null; }
+        /* JSON で返っていないのは Google 側の失敗。答えではないので送り直す */
+        if (!j) throw transient_("サーバーの応答を読めませんでした。");
+        /* ここから先はサーバーが答えを返している。ok:false も答えなので送り直さない */
+        if (!j.ok) throw answered_(j.error || "処理に失敗しました。");
+        return j.data;
+      }).catch(function (err) {
+        if (err && err.answered) throw err;
+        if (!canRetry || n >= RETRIES) {
+          throw (err && err.transient) ? err : transient_(err && err.message || "通信できませんでした。");
+        }
+        return wait_(RETRY_WAIT[n - 1] || 1800).then(function () { return attempt(n + 1); });
       });
-    }).then(function (j) {
-      if (!j.ok) throw new Error(j.error || "処理に失敗しました。");
-      return j.data;
-    });
+    }
+    return attempt(1);
   }
+
+  function transient_(msg) {
+    var e = new Error(msg);
+    e.transient = true;
+    return e;
+  }
+  function answered_(msg) {
+    var e = new Error(msg);
+    e.answered = true;
+    return e;
+  }
+  function wait_(ms) {
+    return new Promise(function (r) { setTimeout(r, ms); });
+  }
+
+  /* 記録1件を指す文字列。再送しても同じ1件だとサーバーに分からせる */
+  function newKey_() {
+    return Date.now().toString(36) + "-" +
+      Math.floor(Math.random() * 1679616).toString(36) + "-" +
+      (keySeq++).toString(36);
+  }
+  var keySeq = 0;
 
   /* トークン切れは通信エラーではなく「ログインし直し」。区別して扱う */
   function isAuthError(err) {
@@ -1867,7 +1911,7 @@ body.live > .device::after { display: none; }
       id: "tmp" + seq, seq: seq, student: state.who, book: state.book, page: state.page,
       section: state.section, major: state.major, q: state.q,
       result: result, cause: 0, daysAgo: 0, today: true, time: hh + ":" + mm,
-      at: now.getTime()
+      at: now.getTime(), key: newKey_()
     };
     records.push(rec);
     state.lastId = rec.id;
@@ -1893,6 +1937,7 @@ body.live > .device::after { display: none; }
   function save(rec) {
     if (!LIVE) { rec._p = Promise.resolve(); return; }
     rec._p = api("addRecord", {
+      key: rec.key,
       student: rec.student, book: rec.book, page: rec.page, section: rec.section,
       major: rec.major, q: rec.q, result: rec.result, cause: rec.cause
     }).then(function (saved) {
@@ -1906,12 +1951,27 @@ body.live > .device::after { display: none; }
       }
       renderAll();   /* 一覧に埋めた仮idも本物に置き換える */
     }, function (err) {
-      rec.failed = true;
-      var i = records.indexOf(rec);
-      if (i >= 0) records.splice(i, 1);
-      if (state.lastId === rec.id) { state.lastId = null; $("toast").hidden = true; }
-      renderAll();
-      fail("記録を保存できませんでした（" + qPlain(rec) + " " + MARK[rec.result] + "）。", err);
+      if (isAuthError(err)) { rec.failed = true; fail("", err); return; }
+
+      /* 何度送っても応答が返らなかった。届いていた可能性があるので、
+         画面から消す前に「入ったのか」を訊く。ここで嘘の取り消しをしない */
+      return api("findRecord", { key: rec.key })
+        .catch(function () { return undefined; })
+        .then(function (found) {
+          if (found && found.id) {           // 入っていた。応答だけが落ちていた
+            rec.id = found.id;
+            rec.at = found.at;
+            renderAll();
+            return;
+          }
+          rec.failed = true;
+          var i = records.indexOf(rec);
+          if (i >= 0) records.splice(i, 1);
+          if (state.lastId === rec.id) { state.lastId = null; $("toast").hidden = true; }
+          renderAll();
+          fail((found === undefined ? "記録を保存できたか確認できません" : "記録を保存できませんでした") +
+               "（" + qPlain(rec) + " " + MARK[rec.result] + "）。", err);
+        });
     });
   }
 
