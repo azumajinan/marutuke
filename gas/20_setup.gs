@@ -46,17 +46,10 @@ function initialize() {
 /**
  * 講師アカウントを作る。
  *
- * 使い方: 下の値を書き換えて、この関数をスクリプトエディタから実行する。
- * 実行したらパスワードの部分は消しておくこと（スクリプトは共同編集者に見える）。
+ * 呼ぶのはスプレッドシートの「まるつけ」メニューから。
+ * スクリプトにパスワードを書かせないため、ここには入口を作らない。
+ * （書いたまま消し忘れると、共同編集者に見えてしまう）
  */
-function createTeacherManually() {
-  var 名前     = '高橋';
-  var ログインID = 'takahashi';
-  var パスワード  = 'ここに決めたパスワード';
-
-  Logger.log(createTeacher(名前, ログインID, パスワード));
-}
-
 function createTeacher(name, loginId, password) {
   if (!name || !loginId || !password) throw new Error('名前・ログインID・パスワードは必須です。');
   if (String(password).length < 8) throw new Error('パスワードは8文字以上にしてください。');
@@ -81,14 +74,7 @@ function createTeacher(name, loginId, password) {
   return '作成しました: ' + name + '（ログインID: ' + loginId + '）';
 }
 
-/** パスワードを変える。上と同じくエディタから実行する */
-function changePasswordManually() {
-  var ログインID    = 'takahashi';
-  var 新しいパスワード = 'ここに新しいパスワード';
-
-  Logger.log(changePassword(ログインID, 新しいパスワード));
-}
-
+/** パスワードを変える。これもメニューから呼ぶ */
 function changePassword(loginId, newPassword) {
   if (String(newPassword).length < 8) throw new Error('パスワードは8文字以上にしてください。');
 

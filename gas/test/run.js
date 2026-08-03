@@ -40,7 +40,22 @@ function mkSheet(name) {
     setFrozenRows() {}, autoResizeColumns() {}
   };
 }
+/* メニューが押した順に記録される。中身の確認用 */
+const uiLog = [];
 global.SpreadsheetApp = {
+  getUi: () => ({
+    ButtonSet: { OK: 'OK', OK_CANCEL: 'OK_CANCEL', YES_NO: 'YES_NO' },
+    Button: { OK: 'OK', YES: 'YES', NO: 'NO' },
+    createMenu(name) {
+      const m = { _items: [] };
+      m.addItem = (label, fn) => { m._items.push([label, fn]); return m; };
+      m.addSeparator = () => m;
+      m.addToUi = () => { uiLog.push({ menu: name, items: m._items }); };
+      return m;
+    },
+    alert: (...a) => { uiLog.push({ alert: a }); return 'OK'; },
+    prompt: (...a) => { uiLog.push({ prompt: a }); return { getSelectedButton: () => 'OK', getResponseText: () => '' }; }
+  }),
   getActiveSpreadsheet: () => ({
     getSheetByName: n => (store[n] ? mkSheet(n) : null),
     insertSheet: n => { store[n] = []; return mkSheet(n); },
@@ -75,7 +90,7 @@ global.ContentService = {
 
 /* ---- 本体を読み込む ---- */
 // 間接 eval はグローバルスコープで走るので、var と function 宣言が globalThis に載る
-for (const f of ['00_config', '10_sheet', '20_setup', '30_auth', '40_data', '50_api']) {
+for (const f of ['00_config', '10_sheet', '20_setup', '30_auth', '40_data', '50_api', '60_menu']) {
   (0, eval)(fs.readFileSync(path.join(__dirname, '..', f + '.gs'), 'utf8'));
 }
 
@@ -238,6 +253,85 @@ t('無効な生徒は一覧から消える', () => {
   const col = sh[0].indexOf('有効');
   sh[1][col] = false;
   eq(getMasters_().students.length, 1);
+});
+
+console.log('\n■ シートから手で足した行の面倒');
+t('メニューが組み立てられる', () => {
+  uiLog.length = 0;
+  onOpen();
+  eq(uiLog[0].menu, 'まるつけ');
+  /* メニューから呼ぶ関数は _ 付きだと GAS が呼べない */
+  uiLog[0].items.forEach(it => {
+    if (/_$/.test(it[1])) throw new Error(it[0] + ' の呼び先が _ 付き: ' + it[1]);
+    if (typeof globalThis[it[1]] !== 'function') throw new Error(it[1] + ' が無い');
+  });
+});
+t('名前だけ打った生徒に id が振られ、有効になる', () => {
+  const sh = store[SHEETS.STUDENT], head = sh[0];
+  const row = head.map(() => '');
+  row[head.indexOf('名前')] = '手打ち 太郎';
+  sh.push(row);
+  normalizeSheets();
+  const added = readAll_(SHEETS.STUDENT).filter(r => r['名前'] === '手打ち 太郎')[0];
+  if (!/^s_/.test(added['id'])) throw new Error('id が振られていない: ' + added['id']);
+  eq(toBool_(added['有効']), true);
+  if (!added['作成日時']) throw new Error('作成日時が空');
+});
+t('生徒一覧にすぐ出る', () => {
+  eq(getMasters_().students.filter(s => s.name === '手打ち 太郎').length, 1);
+});
+t('単元は教材略称だけ打てば教材idが埋まる', () => {
+  const short = readAll_(SHEETS.BOOK)[0]['略称'];
+  const sh = store[SHEETS.UNIT], head = sh[0];
+  const row = head.map(() => '');
+  row[head.indexOf('教材略称')] = short;
+  row[head.indexOf('単元名')] = '手打ち単元';
+  row[head.indexOf('開始ページ')] = 122;
+  row[head.indexOf('終了ページ')] = 140;
+  sh.push(row);
+  normalizeSheets();
+  const u = readAll_(SHEETS.UNIT).filter(r => r['単元名'] === '手打ち単元')[0];
+  eq(u['教材id'], readAll_(SHEETS.BOOK)[0]['id']);
+  if (!/^u_/.test(u['id'])) throw new Error('id が振られていない');
+});
+t('二度実行しても id は振り直されない', () => {
+  const before = readAll_(SHEETS.STUDENT).map(r => r['id']).join(',');
+  normalizeSheets();
+  eq(readAll_(SHEETS.STUDENT).map(r => r['id']).join(','), before);
+});
+t('パスワード未設定の講師を知らせる', () => {
+  const sh = store[SHEETS.TEACHER], head = sh[0];
+  const row = head.map(() => '');
+  row[head.indexOf('名前')] = '新人 花子';
+  row[head.indexOf('ログインID')] = 'hanako';
+  sh.push(row);
+  const msg = normalizeSheets();
+  if (!/新人 花子/.test(msg)) throw new Error('警告に出ない: ' + msg);
+  if (!/ログインできません/.test(msg)) throw new Error('文言が違う: ' + msg);
+});
+t('パスワード未設定ではログインできない', () => throws(() => login_('hanako', 'whatever12'), /違います/));
+t('メニューから設定すればログインできる', () => {
+  changePassword('hanako', 'hanako-no-pass');
+  eq(requireTeacher_(login_('hanako', 'hanako-no-pass').token).name, '新人 花子');
+});
+t('教材に結びつかない単元を知らせる', () => {
+  const sh = store[SHEETS.UNIT], head = sh[0];
+  const row = head.map(() => '');
+  row[head.indexOf('教材略称')] = '存在しない教材';
+  row[head.indexOf('単元名')] = '迷子';
+  sh.push(row);
+  const msg = normalizeSheets();
+  if (!/どの教材か分からない/.test(msg)) throw new Error('警告に出ない: ' + msg);
+});
+t('ログインIDの重複を知らせる', () => {
+  const sh = store[SHEETS.TEACHER], head = sh[0];
+  const row = head.map(() => '');
+  row[head.indexOf('id')] = 't_dup';
+  row[head.indexOf('名前')] = '別人';
+  row[head.indexOf('ログインID')] = 'hanako';
+  sh.push(row);
+  const msg = normalizeSheets();
+  if (!/重複/.test(msg)) throw new Error('警告に出ない: ' + msg);
 });
 
 console.log('\n■ ログアウト');
