@@ -142,9 +142,25 @@ URL を入れたあとでも、末尾に `?demo=1` を付ければデモとし�
 
 ## コードを直したとき
 
-スクリプトを編集しただけでは公開中の版は変わらない。
-**デプロイ → デプロイを管理 → 鉛筆アイコン → バージョン「新バージョン」→ デプロイ** で更新する。
-この手順なら URL は変わらない。「新しいデプロイ」を選ぶと URL が変わってしまうので注意。
+**送るだけでは公開中の版は変わらない。** `push` はエディタの中身を差し替えるだけで、
+公開されているのは「デプロイした時点の版」だから。2手要る。
+
+```bash
+node gas/test/run.js && npx @google/clasp@2.4.2 push --force
+```
+
+```bash
+npx @google/clasp@2.4.2 deploy --deploymentId AKfycbwT55_v0LD3xK7yvY0cYVTUb7URmBurFeXonhpbA9C2FuaDfa-sNH__iKpamyIHB_g --description "更新の内容"
+```
+
+**`--deploymentId` を必ず付けること。** 付けないと新しいデプロイが作られ、URL が変わり、
+`docs/index.html` の `API_URL` も直すはめになる。
+
+画面でやるなら **デプロイ → デプロイを管理 → 鉛筆アイコン → バージョン「新バージョン」→ デプロイ**。
+こちらも URL は変わらない。「新しいデプロイ」を選ぶと変わってしまう。
+
+`clasp deployments` に出てくる `@HEAD` の方は GAS が自動で持っている試験用の枠で、
+公開用ではない。触らなくてよい。
 
 ## API
 
