@@ -63,16 +63,59 @@ function accessUrl_() {
   return APP_BASE_URL + '?k=' + ensureAccessKey_();
 }
 
+/**
+ * URL を見せるダイアログ。
+ *
+ * alert() は本文を手で選んでコピーすることになる。URL が折り返すので
+ * 鍵の途中までしか取れず、「鍵の無いURL」を開いて入れない事故が起きた。
+ * ボタン1つでコピーできる形にして、選択操作そのものを無くす。
+ */
+function showUrlDialog_(title, lead) {
+  var url = accessUrl_();
+  var html =
+    '<style>' +
+    'body{font:13px/1.7 -apple-system,"Helvetica Neue",sans-serif;margin:0;padding:16px;color:#1b2330}' +
+    'p{margin:0 0 12px}.lead{font-weight:600}' +
+    'input{width:100%;box-sizing:border-box;font:12px/1.5 monospace;padding:8px;' +
+    'border:1px solid #c6ccd8;border-radius:6px;background:#f7f8fb}' +
+    '.row{display:flex;gap:8px;align-items:center;margin:10px 0 14px}' +
+    'button{font:600 13px/1 inherit;padding:9px 16px;border:0;border-radius:6px;' +
+    'background:#2f3e7e;color:#fff;cursor:pointer}' +
+    '.ok{color:#1a7f4b;font-weight:600}' +
+    '.warn{color:#8a3324;background:#fdf2ee;padding:10px 12px;border-radius:6px}' +
+    'a{color:#2f3e7e}' +
+    '</style>' +
+    '<p class="lead">' + esc_(lead) + '</p>' +
+    '<input id="u" type="text" readonly value="' + esc_(url) + '">' +
+    '<div class="row">' +
+    '<button onclick="cp()">コピー</button>' +
+    '<a href="' + esc_(url) + '" target="_blank" rel="noopener">この端末で開く</a>' +
+    '<span id="done" class="ok"></span>' +
+    '</div>' +
+    '<p class="warn">このURLを知っている人は誰でも記録を読み書きできます。' +
+    'SNSや公開の場に貼らないでください。渡すのは講師だけに。</p>' +
+    '<p>スマホで使うときは、コピーしたURLを自分宛のメッセージなどで送って開いてください。<br>' +
+    '一度開けば端末が覚えるので、次からは鍵なしのURLでも入れます。</p>' +
+    '<script>' +
+    'function cp(){var e=document.getElementById("u");e.focus();e.setSelectionRange(0,e.value.length);' +
+    'try{document.execCommand("copy");document.getElementById("done").textContent="コピーしました";}' +
+    'catch(err){document.getElementById("done").textContent="Ctrl+C を押してください";}}' +
+    '<\/script>';
+
+  ui_().showModalDialog(
+    HtmlService.createHtmlOutput(html).setWidth(560).setHeight(360),
+    title
+  );
+}
+
+function esc_(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function menuShowUrl() {
   run_('アクセスURL', function () {
-    /* ダイアログの本文は選んでコピーできる */
-    ui_().alert('アクセスURL',
-      accessUrl_() + '\n\n' +
-      'このURLを開けば、そのまま使えます。ログインはありません。\n' +
-      '一度開けば端末が覚えるので、次からは短いURLでも入れます。\n\n' +
-      'このURLを知っている人は誰でも記録を読み書きできます。\n' +
-      'SNSや公開の場に貼らないでください。渡すのは講師だけに。',
-      ui_().ButtonSet.OK);
+    showUrlDialog_('アクセスURL', 'このURLを開けば、そのまま使えます。ログインはありません。');
     return '';
   });
 }
@@ -86,9 +129,7 @@ function menuResetUrl() {
     if (res !== ui_().Button.YES) return '';
 
     resetAccessKey_();
-    ui_().alert('新しいアクセスURL',
-      accessUrl_() + '\n\n古いURLはもう使えません。',
-      ui_().ButtonSet.OK);
+    showUrlDialog_('新しいアクセスURL', '古いURLはもう使えません。各講師にこのURLを配り直してください。');
     return '';
   });
 }
@@ -179,13 +220,12 @@ function fillChild_(name, prefix) {
 function warnings_() {
   var out = [];
 
-  var noPw = readAll_(SHEETS.TEACHER).filter(function (t) {
-    return !String(t['パスワードハッシュ'] || '').trim();
+  var noName = readAll_(SHEETS.TEACHER).filter(function (t) {
+    return !String(t['名前'] || '').trim();
   });
-  if (noPw.length) {
-    out.push('・パスワードが設定されていない講師が ' + noPw.length + ' 人います（' +
-      noPw.map(function (t) { return t['名前'] || t['ログインID'] || '無名'; }).join('、') +
-      '）。\n  「パスワードを変更…」で設定するまでログインできません。');
+  if (noName.length) {
+    out.push('・名前の無い講師の行が ' + noName.length + ' 行あります。\n' +
+      '  画面の講師選びに出てこないので、名前を入れるか行ごと消してください。');
   }
 
   var bookIds = {};
@@ -202,16 +242,16 @@ function warnings_() {
     }
   });
 
-  var dup = {}, dupList = [];
-  readAll_(SHEETS.TEACHER).forEach(function (t) {
-    var lid = String(t['ログインID'] || '').trim();
-    if (!lid) return;
-    if (dup[lid]) { if (dupList.indexOf(lid) < 0) dupList.push(lid); }
-    dup[lid] = true;
+  var seen = {}, dupList = [];
+  readAll_(SHEETS.STUDENT).forEach(function (s) {
+    var id = String(s['id'] || '').trim();
+    if (!id) return;
+    if (seen[id] && dupList.indexOf(id) < 0) dupList.push(id);
+    seen[id] = true;
   });
   if (dupList.length) {
-    out.push('・ログインIDが重複しています: ' + dupList.join('、') +
-      '\n  先に見つかった方だけがログインできます。どちらかを直してください。');
+    out.push('・生徒のidが重複しています: ' + dupList.join('、') +
+      '\n  記録がどちらの生徒のものか分からなくなります。片方を直してください。');
   }
 
   return out.join('\n');

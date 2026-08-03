@@ -899,6 +899,12 @@ body.live > .device::after { display: none; }
 .gate-note {
   font-size: 11.5px; color: var(--ink-muted); margin: 22px 0 0; line-height: 1.7;
 }
+/* 読み込み中。GAS の応答は 404 で落ちると1回 25 秒かかることがあり、
+   その間ダミーの生徒が触れる画面のまま待たせるわけにいかない */
+.gate.loading .gate-note,
+.gate.loading .gate-f,
+.gate.loading .gate-err,
+.gate.loading .gate-go { display: none; }
 
 /* --- 同期の失敗を出す帯。採点は止めないが、黙って落とさない --- */
 .syncbar {
@@ -1135,10 +1141,18 @@ body.live > .device::after { display: none; }
                 このアプリは、鍵の付いたURLを開いた端末だけで使えます。
                 ログインはありません。<br><br>
                 URLは、スプレッドシートの<b>「まるつけ → アクセスURLを表示」</b>で確認できます。
-                そのURLを開き直してください。<br><br>
-                一度開けば端末が覚えるので、次からは鍵なしのURLでも入れます。
               </p>
-              <button class="gate-go" id="gateRetry" type="button">もう一度ためす</button>
+              <label class="gate-f">
+                <span>URL を貼り付ける</span>
+                <input id="gateKey" type="text" inputmode="url" autocomplete="off"
+                       autocapitalize="off" spellcheck="false"
+                       placeholder="https://…/?k=…">
+              </label>
+              <p class="gate-err" id="gateErr" hidden></p>
+              <button class="gate-go" id="gateRetry" type="button">使えるようにする</button>
+              <p class="gate-note">
+                一度入れば端末が覚えるので、次からは鍵なしのURLでも入れます。
+              </p>
             </div>
           </div>
 
@@ -2666,8 +2680,38 @@ body.live > .device::after { display: none; }
   /* ---------- 鍵 ---------- */
   function showGate(msg) {
     $("gate").hidden = false;
+    stopLoading();
     $("rosterGate").hidden = true;
     if (msg) $("gateMsg").textContent = msg;
+  }
+
+  /**
+   * 読み込み中はダミーの生徒を隠す。
+   *
+   * 通信は落ちると1回あたり25秒ほど待たされ、再送を含めると1分近くになる。
+   * その間デモの画面が触れる状態だと、架空の生徒に採点して、
+   * それが読み込み完了と同時に消える。
+   */
+  var slowTimer = null;
+  function showLoading() {
+    $("gate").hidden = false;
+    $("gate").classList.add("loading");
+    $("rosterGate").hidden = true;
+    $("gateMsg").textContent = "読み込んでいます…";
+    /* 待たされているのか固まったのか、黙っていると区別が付かない */
+    clearTimeout(slowTimer);
+    slowTimer = setTimeout(function () {
+      $("gateMsg").textContent = "読み込んでいます… 時間がかかっています。";
+    }, 10000);
+  }
+  function stopLoading() {
+    clearTimeout(slowTimer);
+    $("gate").classList.remove("loading");
+  }
+
+  function gateError(msg) {
+    $("gateErr").textContent = msg || "";
+    $("gateErr").hidden = !msg;
   }
 
   /** 鍵が通らない。端末に覚えた分は捨てる（古い鍵を持ち続けさせない） */
@@ -2703,6 +2747,7 @@ body.live > .device::after { display: none; }
     if (!auth.teacher && teacherRoster.length === 1) auth.teacher = teacherRoster[0];
 
     $("gate").hidden = true;
+    stopLoading();
     renderMeta();
 
     if (!auth.teacher && teacherRoster.length > 1) { renderWhoGate(); return; }
@@ -2714,18 +2759,41 @@ body.live > .device::after { display: none; }
   var rosterUI;
 
   /**
-   * URL の ?k=... を受け取って端末に覚え、URL からは消す。
-   * アドレスバーや共有画面に鍵が残り続けるのを避けるため。
+   * 文字列から鍵を取り出す。
+   *
+   * URL まるごと貼られても、鍵だけ貼られても受け取る。
+   * スプレッドシートのダイアログから手で選んでコピーする作りなので、
+   * 前後に改行や空白が付いてくることを前提にする。
    */
-  function takeKeyFromUrl() {
-    var m = /[?&]k=([^&#]+)/.exec(location.search);
-    if (!m) return;
-    auth.key = decodeURIComponent(m[1]);
-    try { localStorage.setItem(KEY_KEY, auth.key); } catch (e) {}
+  function keyFromText(text) {
+    var s = String(text || "").trim();
+    if (!s) return "";
+    var m = /[?&#]k=([0-9a-fA-F]{16,})/.exec(s);
+    if (m) return m[1].toLowerCase();
+    m = /^[0-9a-fA-F]{16,}$/.exec(s);           /* 鍵だけ貼られた場合 */
+    return m ? s.toLowerCase() : "";
+  }
+
+  function rememberKey(key) {
+    auth.key = key;
+    try { localStorage.setItem(KEY_KEY, key); } catch (e) {}
+    /* 端末が覚えられたときだけ URL から消す。
+       覚えられない設定（プライベートモードなど）で消してしまうと、
+       再読み込みした瞬間に入れなくなる */
+    var stored = "";
+    try { stored = localStorage.getItem(KEY_KEY) || ""; } catch (e) {}
+    if (stored !== key) return;
     try {
-      var clean = location.pathname + location.search.replace(/([?&])k=[^&#]*&?/, "$1").replace(/[?&]$/, "");
+      var clean = location.pathname
+        + location.search.replace(/([?&])k=[^&#]*&?/, "$1").replace(/[?&]$/, "");
       history.replaceState(null, "", clean);
     } catch (e) {}
+  }
+
+  /** URL の ?k=... / #k=... を受け取る */
+  function takeKeyFromUrl() {
+    var key = keyFromText(location.search) || keyFromText(location.hash);
+    if (key) rememberKey(key);
   }
 
   function boot() {
@@ -2740,12 +2808,32 @@ body.live > .device::after { display: none; }
     document.body.appendChild(document.querySelector(".device"));
     rosterUI = bindRoster();
 
-    $("gateRetry").addEventListener("click", function () {
-      $("gate").hidden = true;
+    /**
+     * 貼り付けた URL を鍵として受け取る。
+     * ダイアログから手でコピーすると鍵が欠けることがあり、
+     * そのとき URL を開き直す以外に手が無いと詰むため、ここから入れられるようにする。
+     */
+    function tryPastedKey() {
+      var typed = $("gateKey").value;
+      if (typed.trim()) {
+        var key = keyFromText(typed);
+        if (!key) { gateError("鍵が見つかりません。URL の ?k= から後ろまで入っているか確かめてください。"); return; }
+        rememberKey(key);
+      }
+      if (!auth.key) { gateError("URL を貼り付けてください。"); return; }
+
+      gateError("");
+      $("gateRetry").disabled = true;
+      showLoading();
       load().catch(function (err) {
         if (isAuthError(err)) signOut(err.message);
-        else { showGate("つながりませんでした。もう一度ためしてください。"); }
-      });
+        else showGate("つながりませんでした。もう一度ためしてください。");
+      }).then(function () { $("gateRetry").disabled = false; });
+    }
+
+    $("gateRetry").addEventListener("click", tryPastedKey);
+    $("gateKey").addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter") { ev.preventDefault(); tryPastedKey(); }
     });
 
     $("syncReload").addEventListener("click", function () {
@@ -2764,7 +2852,11 @@ body.live > .device::after { display: none; }
     takeKeyFromUrl();
     if (!auth.key) { try { auth.key = localStorage.getItem(KEY_KEY); } catch (e) {} }
 
-    if (!auth.key) { showGate("このURLでは使えません。"); return; }
+    /* 「鍵が無い」と「鍵が違う」は原因も直し方も別物なので、文言を分ける。
+       前者はコピーの取りこぼし、後者は作り直された鍵であることが多い */
+    if (!auth.key) { showGate("このURLに鍵が入っていません。"); return; }
+
+    showLoading();
     load().catch(function (err) {
       if (isAuthError(err)) signOut(err.message);
       else showGate("つながりませんでした。「もう一度ためす」を押してください。");
