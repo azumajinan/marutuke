@@ -81,8 +81,9 @@ function createTeacher(name, loginId, password) {
     'id':            newId_('t'),
     '名前':           name,
     'ログインID':      loginId,
-    'パスワードハッシュ': hashPassword_(password, salt),
+    'パスワードハッシュ': hashPassword_(password, salt, AUTH.HASH_ROUNDS),
     'ソルト':          salt,
+    '反復回数':        AUTH.HASH_ROUNDS,
     '有効':           true,
     '作成日時':        new Date()
   });
@@ -99,7 +100,8 @@ function changePassword(loginId, newPassword) {
       var salt = newSalt_();
       updateRow_(SHEETS.TEACHER, teachers[i]._row, {
         'ソルト':          salt,
-        'パスワードハッシュ': hashPassword_(newPassword, salt)
+        'パスワードハッシュ': hashPassword_(newPassword, salt, AUTH.HASH_ROUNDS),
+        '反復回数':        AUTH.HASH_ROUNDS
       });
       // その講師のセッションを全部切る
       revokeSessionsOf_(teachers[i]['id']);

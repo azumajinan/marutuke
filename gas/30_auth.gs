@@ -36,12 +36,14 @@ function bytesToHex_(bytes) {
 /**
  * ソルト付きで SHA-256 を繰り返す。
  * GAS には bcrypt が無いので、反復回数で総当たりを遅くする。
- * ハッシュはスプレッドシート内にしか無く、シートの閲覧権を持つのは塾の関係者だけ、
- * という前提に立っている。パスワードは十分な長さにすること。
+ *
+ * rounds は必ず「そのハッシュを作ったときの回数」を渡すこと。
+ * 省略すると今の既定値になる。照合で取り違えると誰もログインできなくなる。
  */
-function hashPassword_(password, salt) {
+function hashPassword_(password, salt, rounds) {
+  var n = toInt_(rounds, 0) || AUTH.HASH_ROUNDS;
   var cur = salt + '|' + password;
-  for (var i = 0; i < AUTH.HASH_ROUNDS; i++) {
+  for (var i = 0; i < n; i++) {
     cur = bytesToHex_(
       Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, cur, Utilities.Charset.UTF_8)
     );
@@ -69,6 +71,16 @@ function isLockedOut_(loginId) {
   return n !== null && toInt_(n, 0) >= AUTH.MAX_FAILURES;
 }
 
+/** 同じ入力の数え直しを避ける。再送は人の試行ではない */
+function alreadyCounted_(key) {
+  if (!key) return false;
+  var k = 'try:' + String(key);
+  var c = CacheService.getScriptCache();
+  if (c.get(k)) return true;
+  c.put(k, '1', 300);
+  return false;
+}
+
 function noteFailure_(loginId) {
   var cache = CacheService.getScriptCache();
   var key = failureKey_(loginId);
@@ -82,7 +94,12 @@ function clearFailures_(loginId) {
 
 /* ---------- ログイン ---------- */
 
-function login_(loginId, password) {
+/**
+ * @param key 画面が1回の入力ごとに作る文字列。
+ *   応答が落ちて再送されたとき、失敗を二重に数えないために使う。
+ *   数えるのは「人が入力し直した回数」であって、通信のやり直しではない。
+ */
+function login_(loginId, password, key) {
   if (!loginId || !password) throw new Error('ログインIDとパスワードを入力してください。');
 
   if (isLockedOut_(loginId)) {
@@ -98,17 +115,30 @@ function login_(loginId, password) {
   // 見つからない場合も同じ文言を返す。IDの存在を教えない
   var FAIL = 'ログインIDまたはパスワードが違います。';
   if (!found || !toBool_(found['有効'])) {
-    noteFailure_(loginId);
+    if (!alreadyCounted_(key)) noteFailure_(loginId);
     throw new Error(FAIL);
   }
 
-  var hash = hashPassword_(password, found['ソルト']);
+  /* 「反復回数」列が無い、または空の行は、列を足す前に作られたもの */
+  var rounds = toInt_(found['反復回数'], 0) || AUTH.LEGACY_ROUNDS;
+
+  var hash = hashPassword_(password, found['ソルト'], rounds);
   if (!safeEquals_(hash, found['パスワードハッシュ'])) {
-    noteFailure_(loginId);
+    if (!alreadyCounted_(key)) noteFailure_(loginId);
     throw new Error(FAIL);
   }
 
   clearFailures_(loginId);
+
+  /* 合っていた。古い回数なら今の回数で入れ直す。本人しか知らないこの瞬間にしかできない */
+  if (rounds !== AUTH.HASH_ROUNDS) {
+    var salt2 = newSalt_();
+    updateRow_(SHEETS.TEACHER, found._row, {
+      'ソルト':          salt2,
+      'パスワードハッシュ': hashPassword_(password, salt2, AUTH.HASH_ROUNDS),
+      '反復回数':        AUTH.HASH_ROUNDS
+    });
+  }
 
   var token = newToken_();
   var now = new Date();

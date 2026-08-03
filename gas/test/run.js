@@ -135,9 +135,58 @@ t('5回失敗でロックされる', () => {
   for (let i = 0; i < 6; i++) { try { login_('lockme', 'bad'); } catch (e) {} }
   throws(() => login_('lockme', 'bad'), /ロック/);
 });
+t('同じ入力の再送は失敗に数えない', () => {
+  /* 通信のやり直しで上限を食い潰さないこと。1回の入力＝1回だけ数える */
+  for (let i = 0; i < 20; i++) {
+    try { login_('retryme', 'bad', 'same-key'); } catch (e) {}
+  }
+  const n = toInt_(cache[failureKey_('retryme')], 0);
+  eq(n, 1);
+  eq(isLockedOut_('retryme'), false);
+});
+t('入力し直せばちゃんと数える', () => {
+  for (let i = 0; i < 5; i++) {
+    try { login_('retryme', 'bad', 'key-' + i); } catch (e) {}
+  }
+  eq(isLockedOut_('retryme'), true);
+});
+t('ロックは解除できる', () => {
+  clearFailures_('retryme');
+  eq(isLockedOut_('retryme'), false);
+});
 t('トークン無しは弾く',   () => throws(() => requireTeacher_(''), /ログイン/));
 t('偽トークンは弾く',     () => throws(() => requireTeacher_('0'.repeat(64)), /有効期限|ログイン/));
 t('正しいトークンは通る', () => eq(requireTeacher_(TOKEN).name, '高橋'));
+
+console.log('\n■ 反復回数を変えても壊れないか');
+t('回数はハッシュと一緒に記録される', () => {
+  const row = readAll_(SHEETS.TEACHER).filter(r => r['ログインID'] === 'takahashi')[0];
+  eq(toInt_(row['反復回数'], 0), AUTH.HASH_ROUNDS);
+});
+t('古い回数で作られた行でもログインできる', () => {
+  /* 「反復回数」列が無かった頃の行を再現する */
+  const row = readAll_(SHEETS.TEACHER).filter(r => r['ログインID'] === 'takahashi')[0];
+  const salt = newSalt_();
+  updateRow_(SHEETS.TEACHER, row._row, {
+    'ソルト': salt,
+    'パスワードハッシュ': hashPassword_('sup3r-secret-pw', salt, AUTH.LEGACY_ROUNDS),
+    '反復回数': ''
+  });
+  eq(login_('takahashi', 'sup3r-secret-pw').teacher.name, '高橋');
+});
+t('ログインした時点で今の回数に入れ替わる', () => {
+  const row = readAll_(SHEETS.TEACHER).filter(r => r['ログインID'] === 'takahashi')[0];
+  eq(toInt_(row['反復回数'], 0), AUTH.HASH_ROUNDS);
+});
+t('入れ替わったあとも同じパスワードで入れる', () => {
+  eq(login_('takahashi', 'sup3r-secret-pw').teacher.name, '高橋');
+});
+t('入れ替えても誤ったパスワードは弾く', () => throws(() => login_('takahashi', 'wrong-password'), /違います/));
+t('回数を取り違えると照合は通らない', () => {
+  const row = readAll_(SHEETS.TEACHER).filter(r => r['ログインID'] === 'takahashi')[0];
+  const wrong = hashPassword_('sup3r-secret-pw', row['ソルト'], AUTH.HASH_ROUNDS + 1);
+  if (safeEquals_(wrong, row['パスワードハッシュ'])) throw new Error('回数が効いていない');
+});
 
 console.log('\n■ 乱数');
 t('トークンは64桁の16進', () => {

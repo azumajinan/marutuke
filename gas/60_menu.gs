@@ -15,6 +15,7 @@ function onOpen() {
     .addSeparator()
     .addItem('講師を追加…', 'menuAddTeacher')
     .addItem('パスワードを変更…', 'menuChangePassword')
+    .addItem('ログインのロックを解除…', 'menuUnlock')
     .addSeparator()
     .addItem('手で足した行を整える', 'menuNormalize')
     .addSeparator()
@@ -80,6 +81,17 @@ function menuChangePassword() {
     if (pw === null) return '';
 
     return changePassword(loginId, pw);
+  });
+}
+
+/** 失敗が続いてロックされたときに、15分待たずに解除する */
+function menuUnlock() {
+  run_('ログインのロックを解除', function () {
+    var loginId = ask_('ログインのロックを解除', 'どの講師ですか。ログインIDを入れてください。');
+    if (loginId === null) return '';
+    if (!loginId) throw new Error('ログインIDが空です。');
+    clearFailures_(loginId);
+    return loginId + ' のロックを解除しました。すぐログインできます。';
   });
 }
 

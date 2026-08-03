@@ -1143,7 +1143,7 @@ body.live > .device::after { display: none; }
               </label>
               <button class="gate-go" id="gateGo" type="submit">ログイン</button>
               <p class="gate-note">
-                照合に1秒ほどかかります。総当たりを遅くするためです。<br>
+                照合に1〜2秒かかります。総当たりを遅くするためです。<br>
                 5回続けて失敗すると、そのIDは15分間ログインできなくなります。
               </p>
             </form>
@@ -2692,7 +2692,8 @@ body.live > .device::after { display: none; }
       $("gateGo").textContent = "照合しています…";
       $("gateErr").hidden = true;
 
-      api("login", { loginId: id, password: pw }).then(function (d) {
+      /* 1回の入力に1つ。再送で失敗回数を余計に数えさせないため */
+      api("login", { loginId: id, password: pw, key: newKey_() }).then(function (d) {
         auth.token = d.token;
         try { localStorage.setItem(TOKEN_KEY, d.token); } catch (e) {}
         return load();

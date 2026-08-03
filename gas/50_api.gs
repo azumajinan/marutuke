@@ -41,7 +41,7 @@ function route_(b) {
 
   // 認証不要なのはこの2つだけ
   if (action === 'ping')  return { ok: true, time: Date.now() };
-  if (action === 'login') return login_(b.loginId, b.password);
+  if (action === 'login') return login_(b.loginId, b.password, b.key);
 
   // ここから先は必ずトークンを確認する
   var teacher = requireTeacher_(b.token);
