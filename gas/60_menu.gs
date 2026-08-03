@@ -128,21 +128,19 @@ function normalizeSheets() {
   });
 }
 
+function isBlank_(v) { return v === '' || v === null || v === undefined; }
+
 /** id・有効・作成日時 を埋める */
 function fillBasic_(name, prefix, defaultActive) {
-  var rows = readAll_(name);
-  var n = 0;
+  ensureHeaders_(name);
+  var now = new Date();
 
-  rows.forEach(function (r) {
+  var n = bulkFix_(name, function (r) {
     var patch = {};
     if (!String(r['id'] || '').trim()) patch['id'] = newId_(prefix);
-    if (r['有効'] === '' || r['有効'] === null || r['有効'] === undefined) {
-      if (defaultActive) patch['有効'] = true;
-    }
-    if (r['作成日時'] === '' || r['作成日時'] === null || r['作成日時'] === undefined) {
-      patch['作成日時'] = new Date();
-    }
-    if (Object.keys(patch).length) { updateRow_(name, r._row, patch); n++; }
+    if (isBlank_(r['有効']) && defaultActive) patch['有効'] = true;
+    if (isBlank_(r['作成日時'])) patch['作成日時'] = now;
+    return Object.keys(patch).length ? patch : null;
   });
 
   return n ? name + 'シート: ' + n + ' 行を整えました。' : '';
@@ -150,18 +148,16 @@ function fillBasic_(name, prefix, defaultActive) {
 
 /** 教材にぶら下がる行（単元・見出し）。教材略称 ⇄ 教材id を補い合う */
 function fillChild_(name, prefix) {
-  var books = readAll_(SHEETS.BOOK);
+  ensureHeaders_(name);
+
   var byShort = {}, byId = {};
-  books.forEach(function (b) {
+  readAll_(SHEETS.BOOK).forEach(function (b) {
     var short = String(b['略称'] || b['書名'] || '').trim();
     if (short) byShort[short] = b;
     if (b['id']) byId[String(b['id']).trim()] = b;
   });
 
-  var rows = readAll_(name);
-  var n = 0;
-
-  rows.forEach(function (r) {
+  var n = bulkFix_(name, function (r) {
     var patch = {};
     if (!String(r['id'] || '').trim()) patch['id'] = newId_(prefix);
 
@@ -173,8 +169,7 @@ function fillChild_(name, prefix) {
     } else if (bookId && !short && byId[bookId]) {
       patch['教材略称'] = byId[bookId]['略称'] || byId[bookId]['書名'];
     }
-
-    if (Object.keys(patch).length) { updateRow_(name, r._row, patch); n++; }
+    return Object.keys(patch).length ? patch : null;
   });
 
   return n ? name + 'シート: ' + n + ' 行を整えました。' : '';

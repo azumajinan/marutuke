@@ -109,6 +109,83 @@ function deleteRow_(name, rowNumber) {
 }
 
 /**
+ * シート全体を1回読んで、1回で書き戻す。
+ *
+ * updateRow_ は1セルごとに通信するので、行数が増えると実行時間の上限に当たる。
+ * 生徒200行を1行ずつ直すと往復が800回になり、6分では終わらない。
+ * ここはシート全体を配列で受け取り、直した列だけまとめて書き戻す。
+ *
+ * patcher(行オブジェクト) が { 列名: 値 } を返せばその行を直す。null なら触らない。
+ * 戻り値は直した行数。
+ */
+function bulkFix_(name, patcher) {
+  var sh = sheet_(name);
+  var lastRow = sh.getLastRow();
+  var lastCol = sh.getLastColumn();
+  if (lastRow < 2 || lastCol < 1) return 0;
+
+  var values = sh.getRange(1, 1, lastRow, lastCol).getValues();
+  var idx = {};
+  for (var c = 0; c < values[0].length; c++) {
+    var h = String(values[0][c]).trim();
+    if (h) idx[h] = c;
+  }
+
+  var changed = 0;
+  var touched = {};                       // 書き戻す列だけ覚える
+
+  for (var r = 1; r < values.length; r++) {
+    var row = values[r];
+    var blank = true;
+    for (var i = 0; i < row.length; i++) {
+      if (row[i] !== '' && row[i] !== null) { blank = false; break; }
+    }
+    if (blank) continue;
+
+    var obj = { _row: r + 1 };
+    for (var k in idx) obj[k] = row[idx[k]];
+
+    var patch = patcher(obj);
+    if (!patch) continue;
+
+    var did = false;
+    for (var key in patch) {
+      if (idx[key] === undefined) continue;
+      row[idx[key]] = patch[key];
+      touched[idx[key]] = true;
+      did = true;
+    }
+    if (did) changed++;
+  }
+
+  /* 触った列だけ書き戻す。シート全体を上書きすると、
+     こちらが関知しない列の書式や式まで巻き込むため */
+  for (var col in touched) {
+    var c1 = Number(col);
+    var colVals = [];
+    for (var rr = 1; rr < values.length; rr++) colVals.push([values[rr][c1]]);
+    sh.getRange(2, c1 + 1, colVals.length, 1).setValues(colVals);
+  }
+  return changed;
+}
+
+/** HEADERS にあって実際のシートに無い列を、右端にまとめて足す */
+function ensureHeaders_(name) {
+  var sh = sheet_(name);
+  var head = HEADERS[name] || [];
+  if (!head.length) return [];
+  var map = headerMap_(sh);
+  var missing = head.filter(function (h) { return map[h] === undefined; });
+  if (!missing.length) return [];
+
+  var at = sh.getLastColumn() + 1;
+  sh.getRange(1, at, 1, missing.length).setValues([missing])
+    .setFontWeight('bold')
+    .setBackground('#EEF0F5');
+  return missing;
+}
+
+/**
  * 衝突しないID。時刻を36進で並べ、末尾に乱数を足す。
  * 講師2人が同時に採点しても衝突しない程度で、シート上でも読める長さ。
  *

@@ -5,6 +5,8 @@ const path = require('path');
 
 /* ---- 偽スプレッドシート ---- */
 const store = {};                       // name -> 2次元配列（1行目が見出し）
+/* 往復の回数を数える。行数に比例して増えないことを確かめるため */
+const io = { read: 0, write: 0 };
 function mkSheet(name) {
   const rows = store[name] || (store[name] = []);
   return {
@@ -14,6 +16,7 @@ function mkSheet(name) {
     getRange(r, c, nr = 1, nc = 1) {
       return {
         getValues() {
+          io.read++;
           const out = [];
           for (let i = 0; i < nr; i++) {
             const row = rows[r - 1 + i] || [];
@@ -24,6 +27,7 @@ function mkSheet(name) {
           return out;
         },
         setValues(v) {
+          io.write++;
           for (let i = 0; i < v.length; i++) {
             const target = rows[r - 1 + i] || (rows[r - 1 + i] = []);
             for (let j = 0; j < v[i].length; j++) target[c - 1 + j] = v[i][j];
@@ -453,6 +457,32 @@ t('教材に結びつかない単元を知らせる', () => {
   const msg = normalizeSheets();
   if (!/どの教材か分からない/.test(msg)) throw new Error('警告に出ない: ' + msg);
 });
+console.log('\n■ 行が増えても終わるか');
+t('200行を整えても往復は数回で済む', () => {
+  /* 1行ずつ書くと GAS の6分制限に当たる。実際に生徒198行で当たった。
+     往復が行数に比例しないことを、ここで固定しておく */
+  const sh = store[SHEETS.STUDENT], head = sh[0];
+  for (let i = 0; i < 200; i++) {
+    const row = head.map(() => '');
+    row[head.indexOf('id')] = String(2000 + i);   // idはある。有効と作成日時が空
+    row[head.indexOf('名前')] = '生徒 ' + i;
+    sh.push(row);
+  }
+  io.read = 0; io.write = 0;
+  normalizeSheets();
+  if (io.read + io.write > 30) {
+    throw new Error('往復が多すぎる: 読み' + io.read + ' 書き' + io.write);
+  }
+});
+t('200人ぜんぶ有効になる', () => {
+  eq(getMasters_().students.filter(s => /^生徒 /.test(s.name)).length, 200);
+});
+t('二度目は書き込みが起きない', () => {
+  io.read = 0; io.write = 0;
+  normalizeSheets();
+  eq(io.write, 0);
+});
+
 console.log('\n■ 鍵を作り直したあと');
 t('作り直すと全部の操作が弾かれる', () => {
   resetAccessKey_();
