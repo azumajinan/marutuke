@@ -852,6 +852,89 @@
   margin-top: 72px; padding-top: 24px; border-top: 1px solid var(--line);
   font-size: 13px; color: var(--ink-muted); max-width: 62ch;
 }
+.foot .mono { font-family: var(--mono); color: var(--ink-2); }
+
+/* ============================================================
+   本番モード
+   API を設定すると、資料部分を畳んで端末の全画面をアプリが占める。
+   ?demo=1 を付ければこのページはデモのまま開ける。
+   ============================================================ */
+body.live { background: var(--surface); margin: 0; }
+body.live > .page { display: none; }
+body.live > .device {
+  width: 100%; max-width: none; height: 100vh; height: 100dvh;
+  border: 0; border-radius: 0; box-shadow: none;
+}
+body.live > .device::after { display: none; }
+
+/* --- ログイン --- */
+.gate {
+  position: absolute; inset: 0; z-index: 60; background: var(--surface);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.gate-card { width: 100%; max-width: 320px; }
+.gate-brand { font-size: 26px; font-weight: 800; letter-spacing: .04em; margin: 0; }
+.gate-sub { font-size: 13.5px; color: var(--ink-2); margin: 6px 0 28px; }
+.gate-f { display: block; margin-bottom: 16px; }
+.gate-f span {
+  display: block; font-size: 11.5px; font-weight: 700;
+  letter-spacing: .1em; color: var(--ink-muted); margin-bottom: 6px;
+}
+.gate-f input {
+  width: 100%; font: inherit; font-size: 16px;   /* 16px 未満だと iOS が拡大する */
+  padding: 12px 14px; border: 1px solid var(--line);
+  border-radius: var(--r-md); background: var(--surface); color: var(--ink);
+}
+.gate-f input:focus-visible { border-color: var(--ai); }
+.gate-go {
+  width: 100%; margin-top: 8px; padding: 14px; font: inherit;
+  font-size: 16px; font-weight: 800; border: 0; border-radius: var(--r-md);
+  background: var(--ai); color: #fff; cursor: pointer;
+}
+.gate-go[disabled] { opacity: .55; cursor: default; }
+.gate-err {
+  font-size: 13px; font-weight: 700; color: var(--x);
+  margin: 0 0 14px; line-height: 1.6;
+}
+.gate-note {
+  font-size: 11.5px; color: var(--ink-muted); margin: 22px 0 0; line-height: 1.7;
+}
+
+/* --- 同期の失敗を出す帯。採点は止めないが、黙って落とさない --- */
+.syncbar {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 55;
+  background: var(--x); color: #fff; padding: 10px 14px;
+  font-size: 12.5px; font-weight: 700; line-height: 1.5;
+  display: flex; align-items: center; gap: 10px;
+}
+.syncbar button {
+  margin-left: auto; flex: none; font: inherit; font-size: 12px;
+  padding: 5px 10px; border-radius: var(--r-sm);
+  border: 1px solid rgba(255,255,255,.55); background: transparent; color: #fff; cursor: pointer;
+}
+
+/* --- コマの生徒を選ぶ --- */
+.roster { padding: 4px 0 8px; }
+.roster-h { font-size: 13px; color: var(--ink-2); margin: 0 0 14px; line-height: 1.6; }
+.roster-list { display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow: auto; }
+.roster-list button {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  font: inherit; padding: 12px 14px; border-radius: var(--r-md);
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer;
+}
+.roster-list button[aria-pressed="true"] { border-color: var(--ai); background: var(--ai-soft); }
+.roster-list .rn { font-size: 15px; font-weight: 700; }
+.roster-list .rg { font-family: var(--mono); font-size: 11.5px; color: var(--ink-muted); margin-left: auto; }
+.roster-go {
+  width: 100%; margin-top: 16px; padding: 13px; font: inherit; font-size: 15px;
+  font-weight: 800; border: 0; border-radius: var(--r-md);
+  background: var(--ai); color: #fff; cursor: pointer;
+}
+.roster-go[disabled] { opacity: .5; cursor: default; }
+.linkbtn {
+  font: inherit; font-size: 11.5px; font-weight: 700; color: var(--ink-muted);
+  background: none; border: 0; padding: 0 0 0 8px; cursor: pointer; text-decoration: underline;
+}
 </style>
 
 <div class="page">
@@ -887,7 +970,7 @@
           <div class="appbar">
             <div class="appbar-top">
               <p class="brand">まるつけ</p>
-              <span class="session-meta">8/1 (土) 17:00 · 2名 · 高橋</span>
+              <span class="session-meta" id="sessionMeta">8/1 (土) 17:00 · 2名 · 高橋</span>
             </div>
             <nav class="nav" role="tablist" aria-label="画面">
               <button role="tab" aria-selected="true"  data-screen="rec">記録</button>
@@ -1035,6 +1118,36 @@
           </div>
 
           <div id="sheetHost"></div>
+
+          <!-- 本番モードでだけ出る。デモでは最後まで hidden のまま -->
+          <div class="syncbar" id="syncbar" hidden>
+            <span id="syncText"></span>
+            <button type="button" id="syncReload">読み込み直す</button>
+          </div>
+
+          <div class="gate" id="rosterGate" hidden></div>
+
+          <div class="gate" id="gate" hidden>
+            <form class="gate-card" id="gateForm" autocomplete="on">
+              <p class="gate-brand">まるつけ</p>
+              <p class="gate-sub">ログインしてください</p>
+              <p class="gate-err" id="gateErr" hidden></p>
+              <label class="gate-f">
+                <span>ログインID</span>
+                <input id="gateId" name="username" autocomplete="username"
+                       autocapitalize="off" autocorrect="off" spellcheck="false" required>
+              </label>
+              <label class="gate-f">
+                <span>パスワード</span>
+                <input id="gatePw" name="password" type="password" autocomplete="current-password" required>
+              </label>
+              <button class="gate-go" id="gateGo" type="submit">ログイン</button>
+              <p class="gate-note">
+                照合に1秒ほどかかります。総当たりを遅くするためです。<br>
+                5回続けて失敗すると、そのIDは15分間ログインできなくなります。
+              </p>
+            </form>
+          </div>
 
         </div>
       </div>
@@ -1283,8 +1396,12 @@
   </section>
 
   <p class="foot">
-    このプロトタイプの動作はすべて画面内のダミーデータです。保存も通信もしていません。
-    デザインが固まってから、Supabase のスキーマとアプリ本体を組みます。
+    このページの動作はすべて画面内のダミーデータです。保存も通信もしていません。
+    実運用では、このファイルの先頭にある <span class="mono">API_URL</span> に
+    Google Apps Script のウェブアプリ URL を入れます。入れると資料部分が畳まれ、
+    ログイン画面から始まる全画面のアプリになり、記録は Google スプレッドシートに保存されます。
+    その状態でも <span class="mono">?demo=1</span> を付ければ、このページはデモとして開けます。
+    セットアップの手順は <span class="mono">gas/README.md</span> にあります。
   </p>
 
 </div>
@@ -1293,6 +1410,52 @@
 <script>
 (function () {
   "use strict";
+
+  /* ============================================================
+     接続先
+
+     GAS をウェブアプリとして公開すると
+       https://script.google.com/macros/s/AKfy……/exec
+     という URL が出る。それをここに貼る。
+
+     空のままだと「デモ」として動く。記録はブラウザの中だけに積まれ、
+     通信は一切しない。公開デモはこの状態で置いておく。
+     URL を入れたあとも ?demo=1 を付ければデモとして開ける。
+     ============================================================ */
+  var API_URL = "";
+
+  var LIVE = !!API_URL && !/[?&]demo=1/.test(location.search);
+  var TOKEN_KEY = "marutuke.token";
+  var ROSTER_KEY = "marutuke.roster";
+
+  /* ---------- API ----------
+     Content-Type を text/plain で送る。application/json にすると
+     CORS の事前確認（OPTIONS）が飛び、GAS はそれに応答できない。 */
+  var auth = { token: null, teacher: null };
+
+  function api(action, params) {
+    var body = { action: action };
+    for (var k in params) if (params.hasOwnProperty(k)) body[k] = params[k];
+    if (auth.token) body.token = auth.token;
+
+    return fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      return res.json().catch(function () {
+        throw new Error("サーバーの応答を読めませんでした。");
+      });
+    }).then(function (j) {
+      if (!j.ok) throw new Error(j.error || "処理に失敗しました。");
+      return j.data;
+    });
+  }
+
+  /* トークン切れは通信エラーではなく「ログインし直し」。区別して扱う */
+  function isAuthError(err) {
+    return /ログイン|有効期限|トークン/.test(String(err && err.message));
+  }
 
   /* ---------- seed ---------- */
   /* 1コマの定員は2名 */
@@ -1328,9 +1491,12 @@
     }
   ];
 
+  /* 教材が1冊も無い状態（登録直後）でも画面が落ちないように、空の1冊を返す */
+  var NO_BOOK = { id: "", title: "教材が未登録です", short: "—", subject: "", pages: 999, units: [], sections: [] };
+
   function bookOf(id) {
     for (var i = 0; i < books.length; i++) if (books[i].id === id) return books[i];
-    return books[0];
+    return books[0] || NO_BOOK;
   }
   function unitOf(bookId, page) {
     var us = bookOf(bookId).units;
@@ -1339,7 +1505,10 @@
     }
     return null;
   }
-  function firstPage(bookId) { return bookOf(bookId).units[0].from; }
+  function firstPage(bookId) {
+    var us = bookOf(bookId).units;
+    return us.length ? us[0].from : 1;
+  }
 
   var SUGGESTIONS = ["基本問題", "練習問題", "章末問題", "例題", "確認問題", "応用問題", "総合問題", "定期テスト対策"];
 
@@ -1640,13 +1809,24 @@
     var v = String(raw || "").trim();
     if (!v) return;
     var b = bookOf(state.book);
-    if (b.sections.indexOf(v) < 0) b.sections.push(v);
+    var isNew = b.sections.indexOf(v) < 0;
+    if (isNew) b.sections.push(v);
     state.section = v;
     state.major = 1;
     state.q = 1;
     state.sheet = null;
     state.sheetInput = "";
     renderAll();
+
+    /* 見出しは教材の語彙。次のコマでもチップとして出したいので教材ごと保存する */
+    if (LIVE && isNew && b.id) {
+      api("addSection", { bookId: b.id, label: v }).catch(function (err) {
+        var i = b.sections.indexOf(v);
+        if (i >= 0) b.sections.splice(i, 1);
+        renderAll();
+        fail("見出しを保存できませんでした。", err);
+      });
+    }
   }
 
   /* 教材が変われば、ページ番号の意味も見出しの語彙も変わる */
@@ -1682,10 +1862,12 @@
     var now = new Date();
     var hh = String(now.getHours()).padStart(2, "0");
     var mm = String(now.getMinutes()).padStart(2, "0");
+    /* 保存が返るまでの仮のid。サーバーが振るidと衝突しない綴りにする */
     var rec = {
-      id: "r" + seq, seq: seq, student: state.who, book: state.book, page: state.page,
+      id: "tmp" + seq, seq: seq, student: state.who, book: state.book, page: state.page,
       section: state.section, major: state.major, q: state.q,
-      result: result, cause: 0, daysAgo: 0, today: true, time: hh + ":" + mm
+      result: result, cause: 0, daysAgo: 0, today: true, time: hh + ":" + mm,
+      at: now.getTime()
     };
     records.push(rec);
     state.lastId = rec.id;
@@ -1702,6 +1884,50 @@
     toastTimer = setTimeout(function () { $("toast").hidden = true; }, result === 2 ? 7000 : 4200);
 
     renderAll();
+    save(rec);
+  }
+
+  /* ---------- 保存 ----------
+     記録はまず画面に出して、送信は裏で行う。通信の往復で採点の手を止めない。
+     失敗したときだけ画面から取り消して、その事実を帯で知らせる。 */
+  function save(rec) {
+    if (!LIVE) { rec._p = Promise.resolve(); return; }
+    rec._p = api("addRecord", {
+      student: rec.student, book: rec.book, page: rec.page, section: rec.section,
+      major: rec.major, q: rec.q, result: rec.result, cause: rec.cause
+    }).then(function (saved) {
+      var wasLast = state.lastId === rec.id;
+      rec.id = saved.id;
+      rec.at = saved.at;
+      /* トーストのボタンは仮idを埋め込んで描いてある。差し替わったので描き直す */
+      if (wasLast) {
+        state.lastId = saved.id;
+        if (!$("toast").hidden && rec.result === 2) renderToastCause(saved.id);
+      }
+      renderAll();   /* 一覧に埋めた仮idも本物に置き換える */
+    }, function (err) {
+      rec.failed = true;
+      var i = records.indexOf(rec);
+      if (i >= 0) records.splice(i, 1);
+      if (state.lastId === rec.id) { state.lastId = null; $("toast").hidden = true; }
+      renderAll();
+      fail("記録を保存できませんでした（" + qPlain(rec) + " " + MARK[rec.result] + "）。", err);
+    });
+  }
+
+  /* その記録の保存が済んでから後続を出す。まだ id が仮のうちに更新を投げないため */
+  function after(rec, fn) {
+    if (!LIVE) return;
+    (rec._p || Promise.resolve()).then(function () {
+      if (rec.failed) return;
+      return fn();
+    }).catch(function (err) { fail("変更を保存できませんでした。", err); });
+  }
+
+  function fail(msg, err) {
+    if (err && isAuthError(err)) { signOut("ログインの有効期限が切れました。"); return; }
+    $("syncText").textContent = msg + (err && err.message ? " " + err.message : "");
+    $("syncbar").hidden = false;
   }
 
   function renderToastCause(recId) {
@@ -1725,24 +1951,37 @@
   function setCause(id, cause) {
     var r = recordById(id);
     if (!r) return;
-    r.cause = r.cause === cause ? 0 : cause;
+    var prev = r.cause;
+    var next = r.cause === cause ? 0 : cause;
+    r.cause = next;
     if (state.causeEdit === id) state.causeEdit = null;
     if (!$("toast").hidden && state.lastId === id) renderToastCause(id);
     renderAll();
+
+    after(r, function () {
+      return api("setCause", { id: r.id, cause: next }).catch(function (err) {
+        r.cause = prev;                       /* 通らなかったので画面も戻す */
+        renderAll();
+        throw err;
+      });
+    });
   }
 
   function undo() {
     if (!state.lastId) return;
     var i = records.findIndex(function (r) { return r.id === state.lastId; });
     if (i >= 0) {
-      switchWho(records[i].student);
-      state.book = records[i].book;
-      state.bookView = records[i].book;
-      state.page = records[i].page;
-      state.section = records[i].section;
-      state.major = records[i].major;
-      state.q = records[i].q;
+      var r = records[i];
+      switchWho(r.student);
+      state.book = r.book;
+      state.bookView = r.book;
+      state.page = r.page;
+      state.section = r.section;
+      state.major = r.major;
+      state.q = r.q;
       records.splice(i, 1);
+      /* 送信済みかもしれないので、保存の完了を待ってから消す */
+      after(r, function () { return api("deleteRecord", { id: r.id }); });
     }
     state.lastId = null;
     $("toast").hidden = true;
@@ -2222,8 +2461,210 @@
     }
   });
 
-  records.forEach(function (r, i) { r.seq = -1000 + i; });
-  setScreen("rec");
-  renderAll();
+  /* ============================================================
+     起動
+     ============================================================ */
+
+  function daysAgoOf(ms) {
+    var d = new Date(ms); d.setHours(0, 0, 0, 0);
+    var t = new Date();   t.setHours(0, 0, 0, 0);
+    return Math.round((t - d) / 86400000);
+  }
+  function pad2(n) { return String(n).padStart(2, "0"); }
+
+  /* サーバーの記録を画面の形に直す。日付まわりは持たせず at から導く */
+  function fromApi(r) {
+    var d = new Date(r.at);
+    var ago = daysAgoOf(r.at);
+    return {
+      id: r.id, student: r.student, book: r.book, page: r.page,
+      section: r.section || "", major: r.major, q: r.q,
+      result: r.result, cause: r.cause || 0,
+      at: r.at, seq: r.at, daysAgo: ago, today: ago === 0,
+      time: pad2(d.getHours()) + ":" + pad2(d.getMinutes())
+    };
+  }
+
+  /* 生徒ごとに、前回どこまで進んだか。続きの1問から始められるようにする */
+  function lastPosOf(studentId) {
+    var last = null;
+    records.forEach(function (r) {
+      if (r.student === studentId) if (!last || r.at > last.at) last = r;
+    });
+    if (!last) return null;
+    return { book: last.book, page: last.page, section: last.section, major: last.major, q: last.q + 1 };
+  }
+
+  function defaultPos(i) {
+    var b = books[i] || books[0] || NO_BOOK;
+    return { book: b.id, page: firstPage(b.id), section: "", major: 1, q: 1 };
+  }
+
+  /* 選んだ2名でコマを組み直す */
+  function startSession(ids) {
+    students = roster.filter(function (s) { return ids.indexOf(s.id) >= 0; });
+    state.ctx = {};
+    students.forEach(function (s, i) {
+      state.ctx[s.id] = lastPosOf(s.id) || defaultPos(i);
+    });
+    state.who = students.length ? students[0].id : "";
+    state.revWho = state.who;
+    state.anaWho = state.who;
+    var c = state.ctx[state.who] || defaultPos(0);
+    state.book = c.book; state.bookView = c.book;
+    state.page = c.page; state.section = c.section; state.major = c.major; state.q = c.q;
+    state.lastId = null;
+    state.anaOpen = {}; state.anaUnitOpen = {};
+
+    try { localStorage.setItem(ROSTER_KEY, JSON.stringify(ids)); } catch (e) {}
+
+    $("rosterGate").hidden = true;
+    renderMeta();
+    setScreen("rec");
+    renderAll();
+  }
+
+  /* 全生徒。students は「このコマの2名」なので別に持つ */
+  var roster = students.slice();
+
+  function renderMeta() {
+    if (!LIVE) return;
+    var d = new Date();
+    $("sessionMeta").innerHTML =
+      (d.getMonth() + 1) + "/" + d.getDate() + " (" + WDAY.charAt(d.getDay()) + ") · " +
+      students.length + "名 · " + esc((auth.teacher && auth.teacher.name) || "") +
+      '<button class="linkbtn" id="metaSwitch" type="button">交代</button>' +
+      '<button class="linkbtn" id="metaOut" type="button">ログアウト</button>';
+  }
+
+  function renderRoster(selected) {
+    var sel = selected || [];
+    $("rosterGate").hidden = false;
+    $("rosterGate").innerHTML =
+      '<div class="gate-card roster">' +
+        '<p class="gate-brand">このコマの生徒</p>' +
+        '<p class="roster-h">2名まで選べます。選ぶと、その生徒が前回やめたところから始まります。</p>' +
+        '<div class="roster-list">' +
+          (roster.length ? roster.map(function (s) {
+            var on = sel.indexOf(s.id) >= 0;
+            return '<button type="button" data-roster="' + esc(s.id) + '" aria-pressed="' + on + '">' +
+              '<span class="rn">' + esc(s.name) + '</span>' +
+              '<span class="rg">' + esc(s.grade || "") + '</span></button>';
+          }).join("") : '<p class="roster-h">生徒が登録されていません。スプレッドシートの「生徒」シートに追加してください。</p>') +
+        '</div>' +
+        '<button class="roster-go" type="button" id="rosterGo"' + (sel.length ? "" : " disabled") + '>' +
+          (sel.length ? "この" + sel.length + "名で始める" : "生徒を選んでください") + '</button>' +
+      '</div>';
+  }
+
+  function bindRoster() {
+    var picked = [];
+    $("rosterGate").addEventListener("click", function (ev) {
+      var b = ev.target.closest("button");
+      if (!b) return;
+      if (b.dataset.roster) {
+        var id = b.dataset.roster, i = picked.indexOf(id);
+        if (i >= 0) picked.splice(i, 1);
+        else if (picked.length < 2) picked.push(id);   /* 1コマ2名まで */
+        renderRoster(picked);
+        return;
+      }
+      if (b.id === "rosterGo" && picked.length) startSession(picked.slice());
+    });
+    return { open: function () { picked = []; renderRoster(picked); } };
+  }
+
+  /* ---------- ログイン ---------- */
+  function showGate(msg) {
+    $("gate").hidden = false;
+    $("rosterGate").hidden = true;
+    $("gateErr").hidden = !msg;
+    if (msg) $("gateErr").textContent = msg;
+    $("gatePw").value = "";
+    $("gateId").focus();
+  }
+
+  function signOut(msg) {
+    auth.token = null; auth.teacher = null;
+    try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
+    $("syncbar").hidden = true;
+    showGate(msg || "");
+  }
+
+  function applyBootstrap(d) {
+    auth.teacher = d.teacher;
+    roster = d.masters.students;
+    books = d.masters.books;
+    records = d.records.map(fromApi);
+
+    var saved = [];
+    try { saved = JSON.parse(localStorage.getItem(ROSTER_KEY) || "[]"); } catch (e) {}
+    saved = saved.filter(function (id) {
+      return roster.some(function (s) { return s.id === id; });
+    });
+
+    $("gate").hidden = true;
+    if (saved.length) startSession(saved);   /* 授業中の再読み込みで選び直させない */
+    else rosterUI.open();
+  }
+
+  function load() { return api("bootstrap", { days: 0 }).then(applyBootstrap); }
+
+  var rosterUI;
+
+  function boot() {
+    if (!LIVE) {                                  /* デモ。通信しない */
+      records.forEach(function (r, i) { r.seq = -1000 + i; });
+      setScreen("rec");
+      renderAll();
+      return;
+    }
+
+    document.body.classList.add("live");
+    document.body.appendChild(document.querySelector(".device"));
+    rosterUI = bindRoster();
+
+    $("gateForm").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var id = $("gateId").value.trim(), pw = $("gatePw").value;
+      if (!id || !pw) return;
+      $("gateGo").disabled = true;
+      $("gateGo").textContent = "照合しています…";
+      $("gateErr").hidden = true;
+
+      api("login", { loginId: id, password: pw }).then(function (d) {
+        auth.token = d.token;
+        try { localStorage.setItem(TOKEN_KEY, d.token); } catch (e) {}
+        return load();
+      }).catch(function (err) {
+        showGate(err.message);
+      }).then(function () {
+        $("gateGo").disabled = false;
+        $("gateGo").textContent = "ログイン";
+      });
+    });
+
+    $("syncReload").addEventListener("click", function () {
+      $("syncbar").hidden = true;
+      load().catch(function (err) { fail("読み込めませんでした。", err); });
+    });
+
+    document.querySelector(".appbar").addEventListener("click", function (ev) {
+      var b = ev.target.closest("button");
+      if (!b) return;
+      if (b.id === "metaSwitch") { rosterUI.open(); return; }
+      if (b.id === "metaOut") {
+        api("logout", {}).catch(function () {});   /* 手元では必ず切る */
+        signOut("");
+      }
+    });
+
+    setScreen("rec");
+    try { auth.token = localStorage.getItem(TOKEN_KEY); } catch (e) {}
+    if (auth.token) load().catch(function () { signOut(""); });
+    else showGate("");
+  }
+
+  boot();
 })();
 </script>
