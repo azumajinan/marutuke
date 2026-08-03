@@ -1,6 +1,11 @@
 # Claude Code のローカル設定（各自の環境に依存するため共有しない）
 .claude/
 
+# clasp が使うスクリプトIDと、テストで作る一時ファイル
+# 公開リポジトリなので、どのプロジェクトかは出さない
+.clasp.json
+__livetest.html
+
 # OS
 Thumbs.db
 desktop.ini

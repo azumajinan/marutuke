@@ -1,0 +1,8 @@
+# GAS に送らないもの。パスは rootDir（gas/）からの相対
+#
+# test/run.js は Node で動かすテスト。読み込まれた時点で走り出すので、
+# GAS 側に置くと initialize() などが勝手に実行されてしまう。
+test/**
+**/test/**
+**/node_modules/**
+README.md
