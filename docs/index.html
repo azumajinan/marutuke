@@ -867,7 +867,7 @@ body.live > .device {
 }
 body.live > .device::after { display: none; }
 
-/* --- ログイン --- */
+/* --- 鍵が無いときの案内 --- */
 .gate {
   position: absolute; inset: 0; z-index: 60; background: var(--surface);
   display: flex; align-items: center; justify-content: center; padding: 24px;
@@ -1128,25 +1128,18 @@ body.live > .device::after { display: none; }
           <div class="gate" id="rosterGate" hidden></div>
 
           <div class="gate" id="gate" hidden>
-            <form class="gate-card" id="gateForm" autocomplete="on">
+            <div class="gate-card">
               <p class="gate-brand">まるつけ</p>
-              <p class="gate-sub">ログインしてください</p>
-              <p class="gate-err" id="gateErr" hidden></p>
-              <label class="gate-f">
-                <span>ログインID</span>
-                <input id="gateId" name="username" autocomplete="username"
-                       autocapitalize="off" autocorrect="off" spellcheck="false" required>
-              </label>
-              <label class="gate-f">
-                <span>パスワード</span>
-                <input id="gatePw" name="password" type="password" autocomplete="current-password" required>
-              </label>
-              <button class="gate-go" id="gateGo" type="submit">ログイン</button>
+              <p class="gate-sub" id="gateMsg">このURLでは使えません。</p>
               <p class="gate-note">
-                照合に1〜2秒かかります。総当たりを遅くするためです。<br>
-                5回続けて失敗すると、そのIDは15分間ログインできなくなります。
+                このアプリは、鍵の付いたURLを開いた端末だけで使えます。
+                ログインはありません。<br><br>
+                URLは、スプレッドシートの<b>「まるつけ → アクセスURLを表示」</b>で確認できます。
+                そのURLを開き直してください。<br><br>
+                一度開けば端末が覚えるので、次からは鍵なしのURLでも入れます。
               </p>
-            </form>
+              <button class="gate-go" id="gateRetry" type="button">もう一度ためす</button>
+            </div>
           </div>
 
         </div>
@@ -1399,7 +1392,7 @@ body.live > .device::after { display: none; }
     このページの動作はすべて画面内のダミーデータです。保存も通信もしていません。
     実運用では、このファイルの先頭にある <span class="mono">API_URL</span> に
     Google Apps Script のウェブアプリ URL を入れます。入れると資料部分が畳まれ、
-    ログイン画面から始まる全画面のアプリになり、記録は Google スプレッドシートに保存されます。
+    全画面のアプリになり、記録は Google スプレッドシートに保存されます。
     その状態でも <span class="mono">?demo=1</span> を付ければ、このページはデモとして開けます。
     セットアップの手順は <span class="mono">gas/README.md</span> にあります。
   </p>
@@ -1425,13 +1418,16 @@ body.live > .device::after { display: none; }
   var API_URL = "https://script.google.com/macros/s/AKfycbwT55_v0LD3xK7yvY0cYVTUb7URmBurFeXonhpbA9C2FuaDfa-sNH__iKpamyIHB_g/exec";
 
   var LIVE = !!API_URL && !/[?&]demo=1/.test(location.search);
-  var TOKEN_KEY = "marutuke.token";
+  var KEY_KEY = "marutuke.key";
+  var WHO_KEY = "marutuke.teacher";
   var ROSTER_KEY = "marutuke.roster";
 
   /* ---------- API ----------
      Content-Type を text/plain で送る。application/json にすると
      CORS の事前確認（OPTIONS）が飛び、GAS はそれに応答できない。 */
-  var auth = { token: null, teacher: null };
+  /* ログインは無い。鍵の入ったURLを開いたことが許可の証拠になる。
+     teacher は「誰が付けた記録か」を残すためだけのもので、権限とは関係ない */
+  var auth = { key: null, teacher: null };
 
   /**
    * GAS のウェブアプリは POST が googleusercontent へリダイレクトされる作りで、
@@ -1444,7 +1440,8 @@ body.live > .device::after { display: none; }
   function api(action, params, opt) {
     var body = { action: action };
     for (var k in params) if (params.hasOwnProperty(k)) body[k] = params[k];
-    if (auth.token) body.token = auth.token;
+    if (auth.key) body.key = auth.key;
+    if (auth.teacher) body.teacher = auth.teacher.id;
     var payload = JSON.stringify(body);
     var canRetry = !opt || opt.retry !== false;
 
@@ -1496,9 +1493,9 @@ body.live > .device::after { display: none; }
   }
   var keySeq = 0;
 
-  /* トークン切れは通信エラーではなく「ログインし直し」。区別して扱う */
+  /* 鍵が違うのは通信エラーではない。再送しても直らないので区別して扱う */
   function isAuthError(err) {
-    return /ログイン|有効期限|トークン/.test(String(err && err.message));
+    return /このURLでは使えません|使える状態になっていません/.test(String(err && err.message));
   }
 
   /* ---------- seed ---------- */
@@ -1937,7 +1934,7 @@ body.live > .device::after { display: none; }
   function save(rec) {
     if (!LIVE) { rec._p = Promise.resolve(); return; }
     rec._p = api("addRecord", {
-      key: rec.key,
+      recKey: rec.key,
       student: rec.student, book: rec.book, page: rec.page, section: rec.section,
       major: rec.major, q: rec.q, result: rec.result, cause: rec.cause
     }).then(function (saved) {
@@ -1955,7 +1952,7 @@ body.live > .device::after { display: none; }
 
       /* 何度送っても応答が返らなかった。届いていた可能性があるので、
          画面から消す前に「入ったのか」を訊く。ここで嘘の取り消しをしない */
-      return api("findRecord", { key: rec.key })
+      return api("findRecord", { recKey: rec.key })
         .catch(function () { return undefined; })
         .then(function (found) {
           if (found && found.id) {           // 入っていた。応答だけが落ちていた
@@ -1985,7 +1982,7 @@ body.live > .device::after { display: none; }
   }
 
   function fail(msg, err) {
-    if (err && isAuthError(err)) { signOut("ログインの有効期限が切れました。"); return; }
+    if (err && isAuthError(err)) { signOut(err.message); return; }
     $("syncText").textContent = msg + (err && err.message ? " " + err.message : "");
     $("syncbar").hidden = false;
   }
@@ -2592,9 +2589,40 @@ body.live > .device::after { display: none; }
     var d = new Date();
     $("sessionMeta").innerHTML =
       (d.getMonth() + 1) + "/" + d.getDate() + " (" + WDAY.charAt(d.getDay()) + ") · " +
-      students.length + "名 · " + esc((auth.teacher && auth.teacher.name) || "") +
+      students.length + "名" +
+      (auth.teacher ? " · " + esc(auth.teacher.name) : "") +
       '<button class="linkbtn" id="metaSwitch" type="button">交代</button>' +
-      '<button class="linkbtn" id="metaOut" type="button">ログアウト</button>';
+      (teacherRoster.length > 1
+        ? '<button class="linkbtn" id="metaWho" type="button">講師</button>' : "");
+  }
+
+  var teacherRoster = [];
+
+  /* 誰が付けた記録かを残すためだけの選択。権限とは関係ない */
+  function renderWhoGate() {
+    $("rosterGate").hidden = false;
+    $("rosterGate").innerHTML =
+      '<div class="gate-card roster">' +
+        '<p class="gate-brand">担当する講師</p>' +
+        '<p class="roster-h">記録に名前を残すために使います。授業のたびに選び直す必要はありません。</p>' +
+        '<div class="roster-list">' +
+          teacherRoster.map(function (t) {
+            return '<button type="button" data-teacher="' + esc(t.id) + '" aria-pressed="' +
+              (!!auth.teacher && auth.teacher.id === t.id) + '">' +
+              '<span class="rn">' + esc(t.name) + '</span></button>';
+          }).join("") +
+        '</div>' +
+      '</div>';
+  }
+
+  function pickTeacher(id) {
+    var hit = null;
+    teacherRoster.forEach(function (t) { if (t.id === id) hit = t; });
+    auth.teacher = hit;
+    try { localStorage.setItem(WHO_KEY, id); } catch (e) {}
+    $("rosterGate").hidden = true;
+    renderMeta();
+    afterTeacherChosen();
   }
 
   function renderRoster(selected) {
@@ -2629,48 +2657,76 @@ body.live > .device::after { display: none; }
         renderRoster(picked);
         return;
       }
+      if (b.dataset.teacher) { pickTeacher(b.dataset.teacher); return; }
       if (b.id === "rosterGo" && picked.length) startSession(picked.slice());
     });
     return { open: function () { picked = []; renderRoster(picked); } };
   }
 
-  /* ---------- ログイン ---------- */
+  /* ---------- 鍵 ---------- */
   function showGate(msg) {
     $("gate").hidden = false;
     $("rosterGate").hidden = true;
-    $("gateErr").hidden = !msg;
-    if (msg) $("gateErr").textContent = msg;
-    $("gatePw").value = "";
-    $("gateId").focus();
+    if (msg) $("gateMsg").textContent = msg;
   }
 
+  /** 鍵が通らない。端末に覚えた分は捨てる（古い鍵を持ち続けさせない） */
   function signOut(msg) {
-    auth.token = null; auth.teacher = null;
-    try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
+    auth.key = null;
+    try { localStorage.removeItem(KEY_KEY); } catch (e) {}
     $("syncbar").hidden = true;
-    showGate(msg || "");
+    showGate(msg || "このURLでは使えません。");
   }
 
-  function applyBootstrap(d) {
-    auth.teacher = d.teacher;
-    roster = d.masters.students;
-    books = d.masters.books;
-    records = d.records.map(fromApi);
-
+  /* 生徒を選ぶところまで進む。講師の選択が済んでから呼ぶ */
+  function afterTeacherChosen() {
     var saved = [];
     try { saved = JSON.parse(localStorage.getItem(ROSTER_KEY) || "[]"); } catch (e) {}
     saved = saved.filter(function (id) {
       return roster.some(function (s) { return s.id === id; });
     });
-
-    $("gate").hidden = true;
     if (saved.length) startSession(saved);   /* 授業中の再読み込みで選び直させない */
     else rosterUI.open();
+  }
+
+  function applyBootstrap(d) {
+    teacherRoster = d.masters.teachers || [];
+    roster = d.masters.students;
+    books = d.masters.books;
+    records = d.records.map(fromApi);
+
+    var savedWho = null;
+    try { savedWho = localStorage.getItem(WHO_KEY); } catch (e) {}
+    auth.teacher = null;
+    teacherRoster.forEach(function (t) { if (t.id === savedWho) auth.teacher = t; });
+    /* 1人しかいなければ選ばせる意味がない */
+    if (!auth.teacher && teacherRoster.length === 1) auth.teacher = teacherRoster[0];
+
+    $("gate").hidden = true;
+    renderMeta();
+
+    if (!auth.teacher && teacherRoster.length > 1) { renderWhoGate(); return; }
+    afterTeacherChosen();
   }
 
   function load() { return api("bootstrap", { days: 0 }).then(applyBootstrap); }
 
   var rosterUI;
+
+  /**
+   * URL の ?k=... を受け取って端末に覚え、URL からは消す。
+   * アドレスバーや共有画面に鍵が残り続けるのを避けるため。
+   */
+  function takeKeyFromUrl() {
+    var m = /[?&]k=([^&#]+)/.exec(location.search);
+    if (!m) return;
+    auth.key = decodeURIComponent(m[1]);
+    try { localStorage.setItem(KEY_KEY, auth.key); } catch (e) {}
+    try {
+      var clean = location.pathname + location.search.replace(/([?&])k=[^&#]*&?/, "$1").replace(/[?&]$/, "");
+      history.replaceState(null, "", clean);
+    } catch (e) {}
+  }
 
   function boot() {
     if (!LIVE) {                                  /* デモ。通信しない */
@@ -2684,24 +2740,11 @@ body.live > .device::after { display: none; }
     document.body.appendChild(document.querySelector(".device"));
     rosterUI = bindRoster();
 
-    $("gateForm").addEventListener("submit", function (ev) {
-      ev.preventDefault();
-      var id = $("gateId").value.trim(), pw = $("gatePw").value;
-      if (!id || !pw) return;
-      $("gateGo").disabled = true;
-      $("gateGo").textContent = "照合しています…";
-      $("gateErr").hidden = true;
-
-      /* 1回の入力に1つ。再送で失敗回数を余計に数えさせないため */
-      api("login", { loginId: id, password: pw, key: newKey_() }).then(function (d) {
-        auth.token = d.token;
-        try { localStorage.setItem(TOKEN_KEY, d.token); } catch (e) {}
-        return load();
-      }).catch(function (err) {
-        showGate(err.message);
-      }).then(function () {
-        $("gateGo").disabled = false;
-        $("gateGo").textContent = "ログイン";
+    $("gateRetry").addEventListener("click", function () {
+      $("gate").hidden = true;
+      load().catch(function (err) {
+        if (isAuthError(err)) signOut(err.message);
+        else { showGate("つながりませんでした。もう一度ためしてください。"); }
       });
     });
 
@@ -2714,16 +2757,18 @@ body.live > .device::after { display: none; }
       var b = ev.target.closest("button");
       if (!b) return;
       if (b.id === "metaSwitch") { rosterUI.open(); return; }
-      if (b.id === "metaOut") {
-        api("logout", {}).catch(function () {});   /* 手元では必ず切る */
-        signOut("");
-      }
+      if (b.id === "metaWho") { renderWhoGate(); return; }
     });
 
     setScreen("rec");
-    try { auth.token = localStorage.getItem(TOKEN_KEY); } catch (e) {}
-    if (auth.token) load().catch(function () { signOut(""); });
-    else showGate("");
+    takeKeyFromUrl();
+    if (!auth.key) { try { auth.key = localStorage.getItem(KEY_KEY); } catch (e) {} }
+
+    if (!auth.key) { showGate("このURLでは使えません。"); return; }
+    load().catch(function (err) {
+      if (isAuthError(err)) signOut(err.message);
+      else showGate("つながりませんでした。「もう一度ためす」を押してください。");
+    });
   }
 
   boot();

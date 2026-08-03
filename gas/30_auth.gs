@@ -1,9 +1,16 @@
 /**
- * まるつけ — 認証
+ * まるつけ — アクセスの許可
  *
- * エンドポイントは匿名公開になるため、防御はここに一本化される。
- * データを読み書きする操作は例外なくトークンを要求すること。
+ * ログインは無い。「アクセスキーの入った URL を知っていること」が許可の条件。
+ * 鍵は URL の ?k=... に入っていて、画面は初回に端末へ保存する。
+ *
+ * エンドポイントは匿名公開なので、防御はこの鍵だけに依存する。
+ * 鍵は公開リポジトリには置かない。スクリプトのプロパティに持つ。
+ *
+ * 照合は文字列比較だけ。パスワードのようなハッシュの繰り返しは無く、一瞬で終わる。
  */
+
+var ACCESS_KEY_PROP = 'ACCESS_KEY';
 
 /**
  * 乱数の出どころ。
@@ -19,11 +26,6 @@ function randomHex_() {
   );
 }
 
-/** ソルトは秘密ではなく重複しなければよいが、乱数の出どころは揃えておく */
-function newSalt_() {
-  return randomHex_().slice(0, 32);
-}
-
 function bytesToHex_(bytes) {
   var s = '';
   for (var i = 0; i < bytes.length; i++) {
@@ -31,24 +33,6 @@ function bytesToHex_(bytes) {
     s += (b < 16 ? '0' : '') + b.toString(16);
   }
   return s;
-}
-
-/**
- * ソルト付きで SHA-256 を繰り返す。
- * GAS には bcrypt が無いので、反復回数で総当たりを遅くする。
- *
- * rounds は必ず「そのハッシュを作ったときの回数」を渡すこと。
- * 省略すると今の既定値になる。照合で取り違えると誰もログインできなくなる。
- */
-function hashPassword_(password, salt, rounds) {
-  var n = toInt_(rounds, 0) || AUTH.HASH_ROUNDS;
-  var cur = salt + '|' + password;
-  for (var i = 0; i < n; i++) {
-    cur = bytesToHex_(
-      Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, cur, Utilities.Charset.UTF_8)
-    );
-  }
-  return cur;
 }
 
 /** 比較にかかる時間を入力に依存させない */
@@ -60,161 +44,37 @@ function safeEquals_(a, b) {
   return diff === 0;
 }
 
-/* ---------- 総当たりの抑制 ---------- */
+/* ---------- アクセスキー ---------- */
 
-function failureKey_(loginId) {
-  return 'fail_' + String(loginId).toLowerCase();
+function getAccessKey_() {
+  return String(PropertiesService.getScriptProperties().getProperty(ACCESS_KEY_PROP) || '');
 }
 
-function isLockedOut_(loginId) {
-  var n = CacheService.getScriptCache().get(failureKey_(loginId));
-  return n !== null && toInt_(n, 0) >= AUTH.MAX_FAILURES;
+/** 鍵を作り直す。前の URL はその場で使えなくなる */
+function resetAccessKey_() {
+  var key = randomHex_().slice(0, 32);
+  PropertiesService.getScriptProperties().setProperty(ACCESS_KEY_PROP, key);
+  return key;
 }
 
-/** 同じ入力の数え直しを避ける。再送は人の試行ではない */
-function alreadyCounted_(key) {
-  if (!key) return false;
-  var k = 'try:' + String(key);
-  var c = CacheService.getScriptCache();
-  if (c.get(k)) return true;
-  c.put(k, '1', 300);
-  return false;
-}
-
-function noteFailure_(loginId) {
-  var cache = CacheService.getScriptCache();
-  var key = failureKey_(loginId);
-  var n = toInt_(cache.get(key), 0) + 1;
-  cache.put(key, String(n), AUTH.LOCKOUT_MINUTES * 60);
-}
-
-function clearFailures_(loginId) {
-  CacheService.getScriptCache().remove(failureKey_(loginId));
-}
-
-/* ---------- ログイン ---------- */
-
-/**
- * @param key 画面が1回の入力ごとに作る文字列。
- *   応答が落ちて再送されたとき、失敗を二重に数えないために使う。
- *   数えるのは「人が入力し直した回数」であって、通信のやり直しではない。
- */
-function login_(loginId, password, key) {
-  if (!loginId || !password) throw new Error('ログインIDとパスワードを入力してください。');
-
-  if (isLockedOut_(loginId)) {
-    throw new Error('ログインの失敗が続いたため、' + AUTH.LOCKOUT_MINUTES + '分間ロックしています。');
-  }
-
-  var teachers = readAll_(SHEETS.TEACHER);
-  var found = null;
-  for (var i = 0; i < teachers.length; i++) {
-    if (String(teachers[i]['ログインID']).trim() === String(loginId).trim()) { found = teachers[i]; break; }
-  }
-
-  // 見つからない場合も同じ文言を返す。IDの存在を教えない
-  var FAIL = 'ログインIDまたはパスワードが違います。';
-  if (!found || !toBool_(found['有効'])) {
-    if (!alreadyCounted_(key)) noteFailure_(loginId);
-    throw new Error(FAIL);
-  }
-
-  /* 「反復回数」列が無い、または空の行は、列を足す前に作られたもの */
-  var rounds = toInt_(found['反復回数'], 0) || AUTH.LEGACY_ROUNDS;
-
-  var hash = hashPassword_(password, found['ソルト'], rounds);
-  if (!safeEquals_(hash, found['パスワードハッシュ'])) {
-    if (!alreadyCounted_(key)) noteFailure_(loginId);
-    throw new Error(FAIL);
-  }
-
-  clearFailures_(loginId);
-
-  /* 合っていた。古い回数なら今の回数で入れ直す。本人しか知らないこの瞬間にしかできない */
-  if (rounds !== AUTH.HASH_ROUNDS) {
-    var salt2 = newSalt_();
-    updateRow_(SHEETS.TEACHER, found._row, {
-      'ソルト':          salt2,
-      'パスワードハッシュ': hashPassword_(password, salt2, AUTH.HASH_ROUNDS),
-      '反復回数':        AUTH.HASH_ROUNDS
-    });
-  }
-
-  var token = newToken_();
-  var now = new Date();
-  withLock_(function () {
-    appendRow_(SHEETS.SESSION, {
-      'token':      token,
-      '講師id':      found['id'],
-      '発行日時':     now,
-      '最終利用日時':  now
-    });
-  });
-
-  return {
-    token: token,
-    teacher: { id: found['id'], name: found['名前'] }
-  };
+/** 無ければ作る。初回の取り違えを防ぐため、勝手には作り直さない */
+function ensureAccessKey_() {
+  return getAccessKey_() || resetAccessKey_();
 }
 
 /**
- * セッショントークン。64桁の16進、256ビット。
+ * データを触る操作は必ずこれを通す。
  *
- * これはパスワードと同じ力を持つ（12時間、全データに触れる）。
- * 推測できてはいけないので、必ず randomHex_ を使うこと。
+ * 鍵が未設定のまま素通しにはしない。設定し忘れが「誰でも書ける状態」になるより、
+ * 「誰も使えない状態」で気付く方がよい。
  */
-function newToken_() {
-  return randomHex_();
-}
-
-/**
- * トークンを検証して講師を返す。無効なら例外。
- * データを触るハンドラは必ず最初にこれを通すこと。
- */
-function requireTeacher_(token) {
-  if (!token) throw new Error('ログインしてください。');
-
-  var sessions = readAll_(SHEETS.SESSION);
-  var hit = null;
-  for (var i = 0; i < sessions.length; i++) {
-    if (safeEquals_(sessions[i]['token'], token)) { hit = sessions[i]; break; }
+function requireKey_(key) {
+  var expected = getAccessKey_();
+  if (!expected) {
+    throw new Error('まだ使える状態になっていません。スプレッドシートの「まるつけ」メニューからアクセスURLを作ってください。');
   }
-  if (!hit) throw new Error('ログインの有効期限が切れました。もう一度ログインしてください。');
-
-  var issued = new Date(hit['発行日時']).getTime();
-  if (!issued || Date.now() - issued > AUTH.SESSION_HOURS * 3600 * 1000) {
-    deleteRow_(SHEETS.SESSION, hit._row);
-    throw new Error('ログインの有効期限が切れました。もう一度ログインしてください。');
-  }
-
-  var teachers = readAll_(SHEETS.TEACHER);
-  for (var j = 0; j < teachers.length; j++) {
-    if (teachers[j]['id'] === hit['講師id'] && toBool_(teachers[j]['有効'])) {
-      // 最終利用の記録は毎回書くと重いので、5分以上空いたときだけ
-      var last = new Date(hit['最終利用日時'] || hit['発行日時']).getTime();
-      if (Date.now() - last > 5 * 60 * 1000) {
-        updateRow_(SHEETS.SESSION, hit._row, { '最終利用日時': new Date() });
-      }
-      return { id: teachers[j]['id'], name: teachers[j]['名前'], _sessionRow: hit._row };
-    }
-  }
-  throw new Error('このアカウントは使えなくなっています。');
-}
-
-function logout_(token) {
-  var sessions = readAll_(SHEETS.SESSION);
-  for (var i = 0; i < sessions.length; i++) {
-    if (safeEquals_(sessions[i]['token'], token)) {
-      deleteRow_(SHEETS.SESSION, sessions[i]._row);
-      return true;
-    }
+  if (!key || !safeEquals_(key, expected)) {
+    throw new Error('このURLでは使えません。正しいURLを管理者から受け取ってください。');
   }
   return true;
-}
-
-function revokeSessionsOf_(teacherId) {
-  var sessions = readAll_(SHEETS.SESSION);
-  for (var i = sessions.length - 1; i >= 0; i--) {
-    if (sessions[i]['講師id'] === teacherId) deleteRow_(SHEETS.SESSION, sessions[i]._row);
-  }
 }

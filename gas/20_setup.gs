@@ -59,56 +59,21 @@ function initialize() {
 }
 
 /**
- * 講師アカウントを作る。
- *
- * 呼ぶのはスプレッドシートの「まるつけ」メニューから。
- * スクリプトにパスワードを書かせないため、ここには入口を作らない。
- * （書いたまま消し忘れると、共同編集者に見えてしまう）
+ * 講師を足す。ログインは無いので名前だけ。
+ * 記録に「誰が付けたか」を残すためのもの。
  */
-function createTeacher(name, loginId, password) {
-  if (!name || !loginId || !password) throw new Error('名前・ログインID・パスワードは必須です。');
-  if (String(password).length < 8) throw new Error('パスワードは8文字以上にしてください。');
+function createTeacher(name) {
+  name = String(name || '').trim();
+  if (!name) throw new Error('名前が空です。');
 
-  var teachers = readAll_(SHEETS.TEACHER);
-  for (var i = 0; i < teachers.length; i++) {
-    if (String(teachers[i]['ログインID']).trim() === String(loginId).trim()) {
-      throw new Error('そのログインIDは既に使われています: ' + loginId);
-    }
-  }
-
-  var salt = newSalt_();
+  var id = newId_('t');
   appendRow_(SHEETS.TEACHER, {
-    'id':            newId_('t'),
-    '名前':           name,
-    'ログインID':      loginId,
-    'パスワードハッシュ': hashPassword_(password, salt, AUTH.HASH_ROUNDS),
-    'ソルト':          salt,
-    '反復回数':        AUTH.HASH_ROUNDS,
-    '有効':           true,
-    '作成日時':        new Date()
+    'id':    id,
+    '名前':   name,
+    '有効':   true,
+    '作成日時': new Date()
   });
-  return '作成しました: ' + name + '（ログインID: ' + loginId + '）';
-}
-
-/** パスワードを変える。これもメニューから呼ぶ */
-function changePassword(loginId, newPassword) {
-  if (String(newPassword).length < 8) throw new Error('パスワードは8文字以上にしてください。');
-
-  var teachers = readAll_(SHEETS.TEACHER);
-  for (var i = 0; i < teachers.length; i++) {
-    if (String(teachers[i]['ログインID']).trim() === String(loginId).trim()) {
-      var salt = newSalt_();
-      updateRow_(SHEETS.TEACHER, teachers[i]._row, {
-        'ソルト':          salt,
-        'パスワードハッシュ': hashPassword_(newPassword, salt, AUTH.HASH_ROUNDS),
-        '反復回数':        AUTH.HASH_ROUNDS
-      });
-      // その講師のセッションを全部切る
-      revokeSessionsOf_(teachers[i]['id']);
-      return 'パスワードを変更しました: ' + loginId + '（ログイン中の端末は切断されます）';
-    }
-  }
-  throw new Error('その講師が見つかりません: ' + loginId);
+  return '追加しました: ' + name;
 }
 
 /**
@@ -144,18 +109,3 @@ function seedSampleData() {
   return 'サンプルデータを入れました。';
 }
 
-/** 期限切れのセッション行を掃除する。日次トリガーに設定してもよい */
-function cleanupSessions() {
-  var rows = readAll_(SHEETS.SESSION);
-  var limit = Date.now() - AUTH.SESSION_HOURS * 3600 * 1000;
-  var removed = 0;
-  // 下から消す。上から消すと行番号がずれる
-  for (var i = rows.length - 1; i >= 0; i--) {
-    var last = new Date(rows[i]['最終利用日時'] || rows[i]['発行日時']).getTime();
-    if (!last || last < limit) {
-      deleteRow_(SHEETS.SESSION, rows[i]._row);
-      removed++;
-    }
-  }
-  return removed + ' 件のセッションを削除しました。';
-}

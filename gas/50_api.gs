@@ -30,6 +30,33 @@ function doGet() {
     .setMimeType(ContentService.MimeType.TEXT);
 }
 
+function selfCheck_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var out = { sheets: {} };
+
+  if (!ss) return { error: 'スプレッドシートに紐付いていません。' };
+
+  for (var key in SHEETS) {
+    var name = SHEETS[key];
+    var sh = ss.getSheetByName(name);
+    if (!sh) { out.sheets[name] = 'ありません'; continue; }
+
+    var head = [];
+    if (sh.getLastColumn() > 0) {
+      head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+               .map(function (v) { return String(v).trim(); });
+    }
+    var missing = (HEADERS[name] || []).filter(function (h) { return head.indexOf(h) < 0; });
+    out.sheets[name] = {
+      行数: Math.max(0, sh.getLastRow() - 1),
+      足りない列: missing
+    };
+  }
+
+  out.アクセスキー設定済み = !!getAccessKey_();
+  return out;
+}
+
 function json_(obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))
@@ -39,25 +66,23 @@ function json_(obj) {
 function route_(b) {
   var action = String(b.action || '');
 
-  // 認証不要なのはこの2つだけ
+  // 鍵が要らないのはこの2つだけ。どちらもデータを返さない
   if (action === 'ping')  return { ok: true, time: Date.now() };
-  if (action === 'login') return login_(b.loginId, b.password, b.key);
 
-  // ここから先は必ずトークンを確認する
-  var teacher = requireTeacher_(b.token);
+  /**
+   * 不具合を切り分けるための自己点検。認証は要らない。
+   * 名前・ハッシュ・IDなど中身は一切返さない。構造と件数だけ。
+   * スキーマは公開リポジトリにあるので、これで増える情報は無い。
+   */
+  if (action === 'selfCheck') return selfCheck_();
+  // ここから先は必ずアクセスキーを確認する
+  requireKey_(b.key);
+  var teacher = teacherOf_(b.teacher);
 
   switch (action) {
-    case 'logout':
-      logout_(b.token);
-      return true;
-
-    case 'me':
-      return { teacher: { id: teacher.id, name: teacher.name } };
-
-    /** ログイン直後の一括取得。マスタと直近の記録をまとめて返す */
+    /** 起動直後の一括取得。マスタと記録をまとめて返す */
     case 'bootstrap':
       return {
-        teacher: { id: teacher.id, name: teacher.name },
         masters: getMasters_(),
         records: getRecords_({ days: b.days })
       };
@@ -79,7 +104,7 @@ function route_(b) {
 
     /** 応答が落ちたときの後始末。受付キーで記録が入ったか確かめる */
     case 'findRecord':
-      return findRecordByKey_(b.key);
+      return findRecordByKey_(b.recKey);
 
     case 'addSection':
       return addSection_(teacher, b.bookId, b.label);

@@ -13,14 +13,11 @@ function onOpen() {
     .createMenu('まるつけ')
     .addItem('シートを作る（最初に1回）', 'menuInitialize')
     .addSeparator()
+    .addItem('アクセスURLを表示', 'menuShowUrl')
+    .addItem('アクセスURLを作り直す', 'menuResetUrl')
+    .addSeparator()
     .addItem('講師を追加…', 'menuAddTeacher')
-    .addItem('パスワードを変更…', 'menuChangePassword')
-    .addItem('ログインのロックを解除…', 'menuUnlock')
-    .addSeparator()
     .addItem('手で足した行を整える', 'menuNormalize')
-    .addSeparator()
-    .addItem('古いセッションを掃除', 'menuCleanupSessions')
-    .addItem('全員をログアウトさせる', 'menuLogoutAll')
     .addToUi();
 }
 
@@ -55,60 +52,44 @@ function menuAddTeacher() {
   run_('講師を追加', function () {
     var name = ask_('講師を追加', '名前を入れてください（例: 高橋）');
     if (name === null) return '';
-    if (!name) throw new Error('名前が空です。');
-
-    var loginId = ask_('講師を追加', 'ログインIDを入れてください。\n半角英数字がおすすめです（例: takahashi）');
-    if (loginId === null) return '';
-    if (!loginId) throw new Error('ログインIDが空です。');
-
-    var pw = ask_('講師を追加',
-      name + ' さんのパスワードを入れてください（8文字以上）。\n\n' +
-      'この文字はシートには残りません。ハッシュだけが保存されます。');
-    if (pw === null) return '';
-
-    return createTeacher(name, loginId, pw) +
-      '\n\nこのログインIDとパスワードで画面にログインできます。';
+    return createTeacher(name) + '\n\n画面を開いたときに、この名前を選べるようになります。';
   });
 }
 
-function menuChangePassword() {
-  run_('パスワードを変更', function () {
-    var loginId = ask_('パスワードを変更', 'どの講師ですか。ログインIDを入れてください。');
-    if (loginId === null) return '';
-    if (!loginId) throw new Error('ログインIDが空です。');
+/** 画面のある場所。アクセスURLを組み立てるのに使う */
+var APP_BASE_URL = 'https://azumajinan.github.io/marutuke/';
 
-    var pw = ask_('パスワードを変更', '新しいパスワードを入れてください（8文字以上）。');
-    if (pw === null) return '';
+function accessUrl_() {
+  return APP_BASE_URL + '?k=' + ensureAccessKey_();
+}
 
-    return changePassword(loginId, pw);
+function menuShowUrl() {
+  run_('アクセスURL', function () {
+    /* ダイアログの本文は選んでコピーできる */
+    ui_().alert('アクセスURL',
+      accessUrl_() + '\n\n' +
+      'このURLを開けば、そのまま使えます。ログインはありません。\n' +
+      '一度開けば端末が覚えるので、次からは短いURLでも入れます。\n\n' +
+      'このURLを知っている人は誰でも記録を読み書きできます。\n' +
+      'SNSや公開の場に貼らないでください。渡すのは講師だけに。',
+      ui_().ButtonSet.OK);
+    return '';
   });
 }
 
-/** 失敗が続いてロックされたときに、15分待たずに解除する */
-function menuUnlock() {
-  run_('ログインのロックを解除', function () {
-    var loginId = ask_('ログインのロックを解除', 'どの講師ですか。ログインIDを入れてください。');
-    if (loginId === null) return '';
-    if (!loginId) throw new Error('ログインIDが空です。');
-    clearFailures_(loginId);
-    return loginId + ' のロックを解除しました。すぐログインできます。';
-  });
-}
-
-function menuCleanupSessions() {
-  run_('古いセッションを掃除', function () { return cleanupSessions(); });
-}
-
-function menuLogoutAll() {
-  run_('全員をログアウトさせる', function () {
-    var res = ui_().alert('全員をログアウトさせる',
-      'ログイン中の端末をすべて切ります。\n次に使うときは、もう一度ログインが要ります。\n\n実行しますか。',
+function menuResetUrl() {
+  run_('アクセスURLを作り直す', function () {
+    var res = ui_().alert('アクセスURLを作り直す',
+      '今のURLは使えなくなります。\n各講師の端末で、新しいURLを開き直す必要があります。\n\n' +
+      '端末を紛失したときなどに使ってください。\n\n作り直しますか。',
       ui_().ButtonSet.YES_NO);
     if (res !== ui_().Button.YES) return '';
 
-    var rows = readAll_(SHEETS.SESSION);
-    for (var i = rows.length - 1; i >= 0; i--) deleteRow_(SHEETS.SESSION, rows[i]._row);
-    return rows.length + ' 件のセッションを切りました。';
+    resetAccessKey_();
+    ui_().alert('新しいアクセスURL',
+      accessUrl_() + '\n\n古いURLはもう使えません。',
+      ui_().ButtonSet.OK);
+    return '';
   });
 }
 

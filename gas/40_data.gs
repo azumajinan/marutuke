@@ -6,7 +6,27 @@
 
 /* ---------- マスタ ---------- */
 
+/**
+ * 送られてきた講師idを名簿に照らす。
+ * 見つからなければ空。記録は残す（誰が付けたか分からない記録の方がまし）。
+ */
+function teacherOf_(id) {
+  id = String(id || '').trim();
+  if (!id) return { id: '', name: '' };
+  var rows = readAll_(SHEETS.TEACHER);
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i]['id']).trim() === id) {
+      return { id: rows[i]['id'], name: rows[i]['名前'] || '' };
+    }
+  }
+  return { id: '', name: '' };
+}
+
 function getMasters_() {
+  var teachers = readAll_(SHEETS.TEACHER)
+    .filter(function (r) { return toBool_(r['有効']); })
+    .map(function (r) { return { id: r['id'], name: r['名前'] }; });
+
   var students = readAll_(SHEETS.STUDENT)
     .filter(function (r) { return toBool_(r['有効']); })
     .map(function (r) {
@@ -42,7 +62,7 @@ function getMasters_() {
       };
     });
 
-  return { students: students, books: books };
+  return { teachers: teachers, students: students, books: books };
 }
 
 /* ---------- 記録 ---------- */
@@ -107,7 +127,8 @@ function addRecord_(teacher, p) {
   if (!st) throw new Error('その生徒は見つかりません。');
   if (!bk) throw new Error('その教材は見つかりません。');
 
-  var key = String(p.key || '').trim();
+  /* アクセスキー（p.key）とは別物。こちらは記録1件を指す受付キー */
+  var key = String(p.recKey || '').trim();
   var id = newId_('r');
   var now = new Date();
 

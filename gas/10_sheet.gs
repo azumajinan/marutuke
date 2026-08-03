@@ -56,10 +56,33 @@ function readAll_(name) {
   return out;
 }
 
+/**
+ * 書こうとした列がまだ無ければ、右端に足してから書く。
+ *
+ * 列を増やしたのに initialize を流し忘れる、という事故を防ぐためのもの。
+ * 黙って書き捨てると、あとから「保存したはずの値が無い」という形で表に出る。
+ * 足すのは HEADERS に定義がある列だけ。知らない名前は無視する。
+ */
+function ensureColumns_(sh, obj) {
+  var map = headerMap_(sh);
+  var known = HEADERS[sh.getName()] || [];
+  var missing = [];
+  for (var k in obj) {
+    if (map[k] === undefined && known.indexOf(k) >= 0 && missing.indexOf(k) < 0) missing.push(k);
+  }
+  if (!missing.length) return map;
+
+  var at = sh.getLastColumn() + 1;
+  sh.getRange(1, at, 1, missing.length).setValues([missing])
+    .setFontWeight('bold')
+    .setBackground('#EEF0F5');
+  return headerMap_(sh);
+}
+
 /** { 列名: 値 } を見出しの順に並べて末尾に追加する */
 function appendRow_(name, obj) {
   var sh = sheet_(name);
-  var map = headerMap_(sh);
+  var map = ensureColumns_(sh, obj);
   var row = [];
   for (var key in map) row[map[key]] = '';
   for (var k in obj) {
@@ -74,7 +97,7 @@ function appendRow_(name, obj) {
 /** 指定行の一部の列だけ書き換える */
 function updateRow_(name, rowNumber, obj) {
   var sh = sheet_(name);
-  var map = headerMap_(sh);
+  var map = ensureColumns_(sh, obj);
   for (var k in obj) {
     if (map[k] === undefined) continue;
     sh.getRange(rowNumber, map[k] + 1).setValue(obj[k]);
