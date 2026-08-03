@@ -5,10 +5,23 @@
  * データを読み書きする操作は例外なくトークンを要求すること。
  */
 
+/**
+ * 乱数の出どころ。
+ *
+ * Math.random() は暗号用途ではない。出力をいくつか見れば内部状態を復元でき、
+ * 続きが予測できる。Utilities.getUuid() は Java の SecureRandom を使うので、
+ * こちらを種にしてハッシュに通す。
+ */
+function randomHex_() {
+  var seed = Utilities.getUuid() + '|' + Utilities.getUuid() + '|' + Date.now();
+  return bytesToHex_(
+    Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, seed, Utilities.Charset.UTF_8)
+  );
+}
+
+/** ソルトは秘密ではなく重複しなければよいが、乱数の出どころは揃えておく */
 function newSalt_() {
-  var bytes = [];
-  for (var i = 0; i < 16; i++) bytes.push(Math.floor(Math.random() * 256) - 128);
-  return bytesToHex_(bytes);
+  return randomHex_().slice(0, 32);
 }
 
 function bytesToHex_(bytes) {
@@ -114,10 +127,14 @@ function login_(loginId, password) {
   };
 }
 
+/**
+ * セッショントークン。64桁の16進、256ビット。
+ *
+ * これはパスワードと同じ力を持つ（12時間、全データに触れる）。
+ * 推測できてはいけないので、必ず randomHex_ を使うこと。
+ */
 function newToken_() {
-  var bytes = [];
-  for (var i = 0; i < 32; i++) bytes.push(Math.floor(Math.random() * 256) - 128);
-  return bytesToHex_(bytes);
+  return randomHex_();
 }
 
 /**

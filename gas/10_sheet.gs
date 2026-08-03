@@ -88,6 +88,10 @@ function deleteRow_(name, rowNumber) {
 /**
  * 衝突しないID。時刻を36進で並べ、末尾に乱数を足す。
  * 講師2人が同時に採点しても衝突しない程度で、シート上でも読める長さ。
+ *
+ * ここは Math.random でよい。IDは秘密ではなく、当てられても
+ * トークンを持たない相手には何もできないため。
+ * 秘密の値（トークン・ソルト）には使わないこと。randomHex_ を使う。
  */
 function newId_(prefix) {
   var t = Date.now().toString(36);

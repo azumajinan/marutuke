@@ -67,6 +67,8 @@ global.SpreadsheetApp = {
 global.Utilities = {
   DigestAlgorithm: { SHA_256: 'SHA_256' },
   Charset: { UTF_8: 'UTF_8' },
+  /* GAS の getUuid は Java の SecureRandom。Node では crypto で代用する */
+  getUuid: () => crypto.randomUUID(),
   computeDigest(_alg, str) {
     const buf = crypto.createHash('sha256').update(str, 'utf8').digest();
     return Array.from(buf).map(b => (b > 127 ? b - 256 : b));
@@ -136,6 +138,37 @@ t('5回失敗でロックされる', () => {
 t('トークン無しは弾く',   () => throws(() => requireTeacher_(''), /ログイン/));
 t('偽トークンは弾く',     () => throws(() => requireTeacher_('0'.repeat(64)), /有効期限|ログイン/));
 t('正しいトークンは通る', () => eq(requireTeacher_(TOKEN).name, '高橋'));
+
+console.log('\n■ 乱数');
+t('トークンは64桁の16進', () => {
+  const tk = newToken_();
+  if (!/^[0-9a-f]{64}$/.test(tk)) throw new Error('形式が違う: ' + tk);
+});
+t('トークンは Math.random に依存しない', () => {
+  /* Math.random を固定しても違う値が出ること。出どころが差し替わった証拠 */
+  const real = Math.random;
+  Math.random = () => 0.42;
+  try {
+    const a = newToken_(), b = newToken_();
+    if (a === b) throw new Error('Math.random に依存している');
+    if (!/^[0-9a-f]{64}$/.test(a)) throw new Error('形式が違う');
+  } finally { Math.random = real; }
+});
+t('ソルトも同じ出どころ', () => {
+  const real = Math.random;
+  Math.random = () => 0.42;
+  try {
+    if (newSalt_() === newSalt_()) throw new Error('Math.random に依存している');
+  } finally { Math.random = real; }
+});
+t('1000本のトークンが全部違う', () => {
+  const seen = {};
+  for (let i = 0; i < 1000; i++) {
+    const tk = newToken_();
+    if (seen[tk]) throw new Error('重複した');
+    seen[tk] = 1;
+  }
+});
 
 console.log('\n■ API の入口が認証を強制しているか');
 const OPEN = ['ping', 'login'];
