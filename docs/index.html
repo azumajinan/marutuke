@@ -1947,11 +1947,17 @@ body.live > .device::after { display: none; }
      失敗したときだけ画面から取り消して、その事実を帯で知らせる。 */
   function save(rec) {
     if (!LIVE) { rec._p = Promise.resolve(); return; }
-    rec._p = api("addRecord", {
+
+    var payload = {
       recKey: rec.key,
       student: rec.student, book: rec.book, page: rec.page, section: rec.section,
       major: rec.major, q: rec.q, result: rec.result, cause: rec.cause
-    }).then(function (saved) {
+    };
+    /* 送る前に控える。応答を待つ間に画面を閉じられても残るように */
+    outboxAdd(rec.key, payload);
+
+    rec._p = api("addRecord", payload).then(function (saved) {
+      outboxDone(rec.key);
       var wasLast = state.lastId === rec.id;
       rec.id = saved.id;
       rec.at = saved.at;
@@ -1970,18 +1976,24 @@ body.live > .device::after { display: none; }
         .catch(function () { return undefined; })
         .then(function (found) {
           if (found && found.id) {           // 入っていた。応答だけが落ちていた
+            outboxDone(rec.key);
             rec.id = found.id;
             rec.at = found.at;
             renderAll();
             return;
           }
+          /* 送れなかった。控えは残してあるので、次に開いたときに送り直す。
+             画面から消して採点し直させるより、送り直す方が失われない。
+             受付キーでサーバーが重複を弾くので、二重にはならない。
+
+             ただし id は仮のままなので、この記録への後続の更新は投げない。
+             つまずきは控えの中身を書き換えて、送信時に一緒に届ける */
           rec.failed = true;
-          var i = records.indexOf(rec);
-          if (i >= 0) records.splice(i, 1);
-          if (state.lastId === rec.id) { state.lastId = null; $("toast").hidden = true; }
+          rec.unsent = true;
           renderAll();
-          fail((found === undefined ? "記録を保存できたか確認できません" : "記録を保存できませんでした") +
-               "（" + qPlain(rec) + " " + MARK[rec.result] + "）。", err);
+          /* 原因は通信で、講師にできることは無い。英語の例外文は出さない */
+          fail("まだ送れていない記録があります（" + qPlain(rec) + " " + MARK[rec.result] +
+               "）。次に開いたときに送ります。", null);
         });
     });
   }
@@ -2028,6 +2040,9 @@ body.live > .device::after { display: none; }
     if (state.causeEdit === id) state.causeEdit = null;
     if (!$("toast").hidden && state.lastId === id) renderToastCause(id);
     renderAll();
+
+    /* まだ送れていない記録なら、控えの側を直す。送り直すときに一緒に届く */
+    if (r.unsent && r.key && outboxSetCause(r.key, next)) return;
 
     after(r, function () {
       return api("setCause", { id: r.id, cause: next }).catch(function (err) {
@@ -2718,6 +2733,9 @@ body.live > .device::after { display: none; }
   function signOut(msg) {
     auth.key = null;
     try { localStorage.removeItem(KEY_KEY); } catch (e) {}
+    /* 端末に残した生徒名と記録も消す。鍵を失った端末に名簿を残さない。
+       送信待ちの控えは別に持っているので、消さずに次の機会に送る */
+    try { localStorage.removeItem(CACHE_KEY); } catch (e) {}
     $("syncbar").hidden = true;
     showGate(msg || "このURLでは使えません。");
   }
@@ -2754,7 +2772,137 @@ body.live > .device::after { display: none; }
     afterTeacherChosen();
   }
 
-  function load() { return api("bootstrap", { days: 0 }).then(applyBootstrap); }
+  function load() {
+    return api("bootstrap", { days: 0 }).then(function (d) {
+      writeCache(d);
+      applyBootstrap(d);
+      flushOutbox();          /* 前回送り切れていない分があれば、ここで出す */
+    });
+  }
+
+  /* ---------- 端末に残す ----------
+     GAS は何をしても3〜5秒、ときどき数十秒かかる。速くする手が無いので、
+     待たせないことで解いた。前回の内容で先に描き、更新は裏でやる。 */
+
+  var CACHE_KEY = "marutuke.cache";
+  var CACHE_VER = 1;
+
+  function readCache() {
+    try {
+      var c = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
+      if (!c || c.v !== CACHE_VER || !c.d || !c.d.masters || !c.d.masters.students) return null;
+      return c.d;
+    } catch (e) { return null; }
+  }
+
+  function writeCache(d) {
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ v: CACHE_VER, at: Date.now(), d: d }));
+    } catch (e) {
+      /* 記録が増えて入り切らなくなった。生徒と教材だけでも残す。
+         次に開いたとき名簿さえ出れば授業は始められる */
+      try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify({
+          v: CACHE_VER, at: Date.now(), d: { masters: d.masters, records: [] }
+        }));
+      } catch (e2) {}
+    }
+  }
+
+  /**
+   * 裏で取り直して、画面を止めずに差し替える。
+   *
+   * applyBootstrap と違い、講師や生徒の選び直しはさせない。
+   * 授業中に取り直しが走って画面が戻る、ということが起きないため。
+   */
+  function mergeFresh(d) {
+    teacherRoster = d.masters.teachers || [];
+    roster = d.masters.students;
+    books = d.masters.books;
+
+    /* まだ送れていない記録だけ残す。
+       送り終わった分を残すと、サーバーから返ってきた同じ記録と二重に並ぶ。
+       送信済みかどうかは控えに残っているかで判る */
+    var waiting = {};
+    outboxRead().forEach(function (it) { waiting[it.k] = true; });
+    var pending = records.filter(function (r) {
+      return String(r.id).indexOf("tmp") === 0 && waiting[r.key];
+    });
+    records = d.records.map(fromApi).concat(pending);
+
+    /* 授業中の2名は、名前や学年が直っているかもしれないので取り直す。
+       見つからない場合（無効にされた等）は今の行のまま続けさせる */
+    students = students.map(function (old) {
+      var now = null;
+      roster.forEach(function (s) { if (s.id === old.id) now = s; });
+      return now || old;
+    });
+
+    renderMeta();
+    renderAll();
+  }
+
+  /* ---------- 送信待ちの控え ----------
+     送信は裏で走るので、終わる前に画面を閉じられることがある。
+     採点は取り戻せない唯一のデータなので、端末に控えを残して次回送り直す。
+     受付キーでサーバー側が重複を弾くため、送り直しても二重にならない。 */
+
+  var OUTBOX_KEY = "marutuke.outbox";
+  var OUTBOX_TRIES = 5;
+
+  function outboxRead() {
+    try { return JSON.parse(localStorage.getItem(OUTBOX_KEY) || "[]"); } catch (e) { return []; }
+  }
+  function outboxWrite(list) {
+    try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(list)); } catch (e) {}
+  }
+  function outboxAdd(recKey, payload) {
+    var l = outboxRead();
+    l.push({ k: recKey, n: 0, p: payload });
+    outboxWrite(l);
+  }
+  function outboxDone(recKey) {
+    outboxWrite(outboxRead().filter(function (it) { return it.k !== recKey; }));
+  }
+  /** まだ送れていない記録のつまずきを差し替える。控えが無ければ false */
+  function outboxSetCause(recKey, cause) {
+    var l = outboxRead(), hit = false;
+    l.forEach(function (it) { if (it.k === recKey) { it.p.cause = cause; hit = true; } });
+    if (hit) outboxWrite(l);
+    return hit;
+  }
+
+  function flushOutbox() {
+    var list = outboxRead();
+    if (!list.length) return Promise.resolve();
+
+    /* 何度出しても通らないものを毎回引きずらない */
+    list.forEach(function (it) { it.n = (it.n || 0) + 1; });
+    outboxWrite(list.filter(function (it) { return it.n <= OUTBOX_TRIES; }));
+
+    return Promise.all(list.map(function (it) {
+      if (it.n > OUTBOX_TRIES) return Promise.resolve();
+      return api("addRecord", it.p).then(
+        function () { outboxDone(it.k); },
+        function () { /* 残したまま。次に開いたときにもう一度出す */ }
+      );
+    }));
+  }
+
+  function syncInBackground() {
+    flushOutbox().then(refreshInBackground, refreshInBackground);
+  }
+
+  function refreshInBackground() {
+    api("bootstrap", { days: 0 }).then(function (d) {
+      writeCache(d);
+      mergeFresh(d);
+    }, function (err) {
+      /* 鍵が変わっている。この先どう転んでも保存できないので黙らない */
+      if (isAuthError(err)) { signOut(err.message); return; }
+      /* つながらなかっただけ。前回の内容で動いているので何も言わない */
+    });
+  }
 
   var rosterUI;
 
@@ -2855,6 +3003,14 @@ body.live > .device::after { display: none; }
     /* 「鍵が無い」と「鍵が違う」は原因も直し方も別物なので、文言を分ける。
        前者はコピーの取りこぼし、後者は作り直された鍵であることが多い */
     if (!auth.key) { showGate("このURLに鍵が入っていません。"); return; }
+
+    /* 2回目以降は待たせない。前回の内容で描いてから、裏で取り直す */
+    var cached = readCache();
+    if (cached) {
+      applyBootstrap(cached);
+      syncInBackground();
+      return;
+    }
 
     showLoading();
     load().catch(function (err) {
