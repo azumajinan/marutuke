@@ -102,10 +102,30 @@ function showUrlDialog_(title, lead) {
     'catch(err){document.getElementById("done").textContent="Ctrl+C を押してください";}}' +
     '<\/script>';
 
-  ui_().showModalDialog(
-    HtmlService.createHtmlOutput(html).setWidth(560).setHeight(360),
-    title
-  );
+  /**
+   * showModalDialog は script.container.ui の権限が要る。
+   * 先に別の権限で承認済みだと、承認し直すまで呼べない。
+   * その場合でも URL は渡せないと困るので alert に落とす。
+   *
+   * alert は本文を手で選ぶことになり、URL は折り返して途中で切れやすい。
+   * そこで鍵だけを1行で見せる。画面の貼り付け欄は鍵だけでも受け取る。
+   */
+  try {
+    ui_().showModalDialog(
+      HtmlService.createHtmlOutput(html).setWidth(560).setHeight(360),
+      title
+    );
+  } catch (err) {
+    ui_().alert(title,
+      lead + '\n\n' +
+      '【URL】\n' + url + '\n\n' +
+      '【鍵だけ】\n' + ensureAccessKey_() + '\n\n' +
+      'URL が長くて選びにくいときは、下の鍵だけをコピーしてください。\n' +
+      APP_BASE_URL + ' を開き、案内画面の貼り付け欄に入れれば使えます。\n\n' +
+      'このURLを知っている人は誰でも記録を読み書きできます。\n' +
+      'SNSや公開の場に貼らないでください。渡すのは講師だけに。',
+      ui_().ButtonSet.OK);
+  }
 }
 
 function esc_(s) {
