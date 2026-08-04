@@ -892,6 +892,16 @@ body.live > .device::after { display: none; }
   background: var(--ai); color: #fff; cursor: pointer;
 }
 .gate-go[disabled] { opacity: .55; cursor: default; }
+.gate-diag {
+  width: 100%; margin-top: 10px; padding: 11px; font: inherit;
+  font-size: 13.5px; font-weight: 700; border: 1px solid var(--line);
+  border-radius: var(--r-md); background: transparent; color: var(--ink-2); cursor: pointer;
+}
+.gate-diag[disabled] { opacity: .55; cursor: default; }
+.gate-out {
+  font-size: 12.5px; color: var(--ink-2); line-height: 1.7;
+  margin: 12px 0 0; white-space: pre-wrap;
+}
 .gate-err {
   font-size: 13px; font-weight: 700; color: var(--x);
   margin: 0 0 14px; line-height: 1.6;
@@ -904,7 +914,9 @@ body.live > .device::after { display: none; }
 .gate.loading .gate-note,
 .gate.loading .gate-f,
 .gate.loading .gate-err,
-.gate.loading .gate-go { display: none; }
+.gate.loading .gate-go,
+.gate.loading .gate-diag,
+.gate.loading .gate-out { display: none; }
 
 /* --- 同期の失敗を出す帯。採点は止めないが、黙って落とさない --- */
 .syncbar {
@@ -1150,6 +1162,8 @@ body.live > .device::after { display: none; }
               </label>
               <p class="gate-err" id="gateErr" hidden></p>
               <button class="gate-go" id="gateRetry" type="button">使えるようにする</button>
+              <button class="gate-diag" id="gateDiag" type="button">つながるか調べる</button>
+              <p class="gate-out" id="gateOut" hidden></p>
               <p class="gate-note">
                 一度入れば端末が覚えるので、次からは鍵なしのURLでも入れます。
               </p>
@@ -1454,7 +1468,8 @@ body.live > .device::after { display: none; }
   function api(action, params, opt) {
     var body = { action: action };
     for (var k in params) if (params.hasOwnProperty(k)) body[k] = params[k];
-    if (auth.key) body.key = auth.key;
+    /* 呼ぶ側が鍵を指定していればそれを使う。切り分けで捨てた鍵を試すため */
+    if (body.key === undefined && auth.key) body.key = auth.key;
     if (auth.teacher) body.teacher = auth.teacher.id;
     var payload = JSON.stringify(body);
     var canRetry = !opt || opt.retry !== false;
@@ -2724,6 +2739,8 @@ body.live > .device::after { display: none; }
     $("gate").classList.remove("loading");
   }
 
+  var rejectedKey = null;
+
   function gateError(msg) {
     $("gateErr").textContent = msg || "";
     $("gateErr").hidden = !msg;
@@ -2731,6 +2748,9 @@ body.live > .device::after { display: none; }
 
   /** 鍵が通らない。端末に覚えた分は捨てる（古い鍵を持ち続けさせない） */
   function signOut(msg) {
+    /* 弾かれた鍵は捨てるが、値は覚えておく。切り分けのとき
+       「持っていない」のか「古い」のかを言い分けるため */
+    rejectedKey = auth.key || rejectedKey;
     auth.key = null;
     try { localStorage.removeItem(KEY_KEY); } catch (e) {}
     /* 端末に残した生徒名と記録も消す。鍵を失った端末に名簿を残さない。
@@ -2979,6 +2999,55 @@ body.live > .device::after { display: none; }
       }).then(function () { $("gateRetry").disabled = false; });
     }
 
+    /**
+     * どこで止まっているのかを画面自身に言わせる。
+     *
+     * 「入れません」だけでは、電波なのか、鍵が古いのか、サーバー側の
+     * 設定なのかが分からない。順に確かめて、次にやることを1つ示す。
+     */
+    function diagnose() {
+      var out = $("gateOut");
+      var say = function (t) { out.hidden = false; out.textContent = t; };
+
+      $("gateDiag").disabled = true;
+      say("調べています…（10秒ほどかかります）");
+
+      /* selfCheck は鍵が要らない。通信できるかだけを先に切り分ける */
+      api("selfCheck", {}).then(function (info) {
+        if (!info["アクセスキー設定済み"]) {
+          say("サーバーとは話せています。\n" +
+              "ただしサーバー側に鍵がありません。\n\n" +
+              "→ スプレッドシートの「まるつけ → アクセスURLを表示」を実行してください。");
+          return;
+        }
+        /* 弾かれた鍵は auth から消えているので、控えの方を試す */
+        var k = auth.key || rejectedKey;
+        if (!k) {
+          say("サーバーとは話せています。鍵も設定されています。\n" +
+              "この端末が鍵を持っていません。\n\n" +
+              "→ 上の欄に URL か鍵を貼り付けてください。");
+          return;
+        }
+        /* 通信も鍵の存在も確認できた。あとは手元の鍵が合っているか */
+        return api("masters", { key: k }).then(function () {
+          say("使えます。「使えるようにする」を押してください。");
+        }, function (err) {
+          if (!isAuthError(err)) { say("サーバーとは話せますが、読み込みに失敗しました。\n" + (err && err.message || "")); return; }
+          say("サーバーとは話せています。\n" +
+              "この端末の鍵（" + String(k).slice(0, 6) + "…）は、今の鍵と違います。\n\n" +
+              "→ スプレッドシートの「まるつけ → アクセスURLを表示」で\n" +
+              "  今の鍵を出し、上の欄に貼り付けてください。\n" +
+              "  頭の6文字が一致していれば正しい鍵です。");
+        });
+      }, function () {
+        say("サーバーにつながりません。\n\n" +
+            "→ 電波を確かめて、もう一度押してください。\n" +
+            "  何度やっても同じなら、ウェブアプリの公開が\n" +
+            "  止まっている可能性があります。");
+      }).then(function () { $("gateDiag").disabled = false; });
+    }
+
+    $("gateDiag").addEventListener("click", diagnose);
     $("gateRetry").addEventListener("click", tryPastedKey);
     $("gateKey").addEventListener("keydown", function (ev) {
       if (ev.key === "Enter") { ev.preventDefault(); tryPastedKey(); }
